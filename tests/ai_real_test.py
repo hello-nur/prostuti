@@ -58,6 +58,13 @@ def native_request(method, url, key, body):
         status, text = 0, str(e)
     dt = time.time() - t0
     info = ""
+    if status == 200 and groq and method == "POST":
+        try:
+            j = json.loads(text); ch = j["choices"][0]; c = ch["message"].get("content") or ""
+            try: json.loads(c); okj = "json ok"
+            except Exception: okj = "not json"
+            info = f"finish={ch.get('finish_reason')} tokens={j.get('usage', {}).get('completion_tokens')} {okj if body and 'response_format' in body else ''}"
+        except Exception: info = "unreadable"
     if status != 200:
         try: info = json.loads(text)["error"]["message"][:160]
         except Exception: info = text[:160]
@@ -189,7 +196,7 @@ lines = ["# Prostuti real AI test", "", f"Keys used: Groq {'yes' if GROQ_KEY els
          "| Step | Result | Time | Details |", "|---|---|---|---|"]
 for r in results:
     lines.append(f"| {r['name']} | {'✅ PASS' if r['ok'] else '❌ FAIL'} | {r['sec']} s | {r['detail'].replace('|', '/')[:300]} |")
-lines += ["", "## Every Gemini call", "", "| # | Model | Status | Seconds | Error |", "|---|---|---|---|---|"]
+lines += ["", "## Every AI call", "", "| # | Model | Status | Seconds | Info |", "|---|---|---|---|---|"]
 for i, c in enumerate(calls, 1):
     lines.append(f"| {i} | {c['model']} | {c['status']} | {c['sec']} | {c['info'].replace('|', '/')} |")
 lines += ["", "Page errors: " + ("none" if not errors else "; ".join(errors)[:500])]

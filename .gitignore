@@ -6,3 +6,5 @@ local.properties
 .idea/
 app/*.jks
 app/signing.properties
+__pycache__/
+test-results/

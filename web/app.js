@@ -646,20 +646,31 @@ ACT.mockStart = async () => {
   const n = Math.min(m.n, 30);
   busy(L("Writing your question paper…", "তোমার প্রশ্নপত্র তৈরি হচ্ছে…"));
   try {
-    const subs = m.subs.map(s => SUB[s].en + " (chapters: " + SUB[s].ch.join("; ") + ")").join("\n");
-    const out = await AI.generate({
-      ...aiKeys(), system: sysPrompt(m.subs.length === 1 ? m.subs[0] : "mix"), json: true, temperature: 0.9, timeout: 75000,
-      schema: { type: "ARRAY", items: { type: "OBJECT", properties: { subject: { type: "STRING" }, chapter: { type: "INTEGER" }, q: { type: "STRING" }, options: { type: "ARRAY", items: { type: "STRING" } }, answer: { type: "INTEGER" }, explanation: { type: "STRING" } }, required: ["subject", "chapter", "q", "options", "answer", "explanation"] } },
-      prompt: "Create a " + n + "-question MCQ model test paper" + (m.neg ? " in university admission style" : " in Bangladesh board exam style") + ", spread across these subjects:\n" + subs +
-        "\nFor each item return: subject (exactly the English subject name given above), chapter (0-based index in that subject's chapter list), q, options (exactly 4), answer (0-based correct index), explanation (1–2 sentences). Vary difficulty and the correct answer position."
-    });
+    const schema = { type: "ARRAY", items: { type: "OBJECT", properties: { subject: { type: "STRING" }, chapter: { type: "INTEGER" }, q: { type: "STRING" }, options: { type: "ARRAY", items: { type: "STRING" } }, answer: { type: "INTEGER" }, explanation: { type: "STRING" } }, required: ["subject", "chapter", "q", "options", "answer", "explanation"] } };
+    // Write the paper in batches of up to 10 questions at the same time: faster, and each request stays inside free limits.
+    const sizes = []; for (let left = n; left > 0; left -= 10) sizes.push(Math.min(10, left));
+    const subsFor = k => { const list = m.subs.length <= sizes.length ? m.subs : m.subs.filter((_, i) => i % sizes.length === k); return list.length ? list : m.subs; };
+    const batch = (size, k) => {
+      const subsK = subsFor(k);
+      const subs = subsK.map(s => SUB[s].en + " (chapters: " + SUB[s].ch.join("; ") + ")").join("\n");
+      return AI.generate({
+        ...aiKeys(), system: sysPrompt(subsK.length === 1 ? subsK[0] : "mix"), json: true, temperature: 0.9, timeout: 60000, schema,
+        prompt: "Create " + size + " MCQs for a model test paper" + (m.neg ? " in university admission style" : " in Bangladesh board exam style") + ", spread across these subjects:\n" + subs +
+          "\nFor each item return: subject (exactly the English subject name given above), chapter (0-based index in that subject's chapter list), q, options (exactly 4), answer (0-based correct index), explanation (1–2 sentences). Vary difficulty and the correct answer position."
+      }).then(out => (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])), e => { batchErr = e; return []; });
+    };
+    let batchErr = null;
+    const parts = await Promise.all(sizes.map((size, k) => batch(size, k)));
+    const out = [].concat(...parts);
+    if (!out.length && batchErr) throw batchErr;
     const byName = {}; m.subs.forEach(s => { byName[SUB[s].en.toLowerCase()] = s; });
     const stamp = Date.now().toString(36);
-    const qs = (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])).filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3).map((x, i) => {
+    const qs = out.filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3).map((x, i) => {
       const s = byName[String(x.subject || "").toLowerCase()] || m.subs[i % m.subs.length];
       const c = Math.max(0, Math.min(SUB[s].ch.length - 1, Number(x.chapter) || 0));
       return { id: "a" + stamp + "m" + i, s, c, q: String(x.q), o: x.options.map(String), a: Number(x.answer), e: String(x.explanation || ""), src: "ai" };
     });
+    if (qs.length && qs.length < n) toast(L("Got " + qs.length + " of " + n + " questions (free AI limit) — starting with those.", N(n) + "টির মধ্যে " + N(qs.length) + "টি প্রশ্ন পাওয়া গেছে (ফ্রি সীমা) — এগুলো দিয়ে শুরু হচ্ছে।"));
     if (!qs.length) throw new Error("AI returned no usable questions");
     S.ai = qs.concat(S.ai).slice(0, 3000); reindex(); save(); closeModal();
     startQuiz({ mode: "mock", title: "✨ " + title, qs, limit: Math.round(m.min * 60 * qs.length / m.n), neg: m.neg });

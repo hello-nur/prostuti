@@ -152,37 +152,49 @@ window.AI = (function () {
 
   async function groq(opts, tmo, deadline) {
     const msgs = [];
+    const wantArray = opts.json && opts.schema && opts.schema.type === "ARRAY";
     let sys = opts.system || "";
-    if (opts.json) sys += (sys ? "\n\n" : "") + "Reply with ONLY valid JSON (no markdown, no extra text)" + (opts.schema ? " in exactly this shape: " + schemaHint(opts.schema) : "") + ".";
+    if (opts.json) {
+      const hint = opts.schema ? schemaHint(opts.schema) : "";
+      sys += (sys ? "\n\n" : "") + "Reply with ONLY one valid JSON object, no markdown and no extra text. " +
+        (wantArray ? "Put the list inside the key \"items\", exactly like: {\"items\": " + hint + "}" : (hint ? "Use exactly this shape: " + hint : "")) +
+        " Escape any double quotes inside strings.";
+    }
     if (sys) msgs.push({ role: "system", content: sys });
     (opts.history || []).forEach(function (h) { msgs.push({ role: h.role === "user" ? "user" : "assistant", content: h.text }); });
     msgs.push({ role: "user", content: opts.prompt });
     const list = await groqModels(opts.groqKey);
     const order = opts.groqModel ? [opts.groqModel].concat(list.filter(function (m) { return m !== opts.groqModel; })) : list;
-    let res = null, quota = 0, busy = 0;
-    for (let i = 0; i < order.length && i < 3 && Date.now() < deadline; i++) {
+    let res = null, quota = 0, busy = 0, bad = 0;
+    for (let i = 0; i < order.length && i < 4 && Date.now() < deadline; i++) {
       const m = order[i];
-      const body = { model: m, messages: msgs, temperature: opts.temperature == null ? 0.7 : opts.temperature, max_completion_tokens: opts.json ? 8000 : 2500 };
+      const body = { model: m, messages: msgs, temperature: opts.temperature == null ? 0.7 : opts.temperature, max_completion_tokens: opts.json ? 16000 : 3000 };
+      if (opts.json) body.response_format = { type: "json_object" };
       if (/gpt-oss/.test(m)) body.reasoning_effort = "low";
       if (/qwen3/.test(m)) body.reasoning_format = "hidden";
       res = await http("POST", GROQ + "/chat/completions", opts.groqKey, JSON.stringify(body), tmo);
+      if (res.status === 400 && opts.json && /response_format|json/i.test(res.text)) { // model without JSON mode
+        delete body.response_format;
+        res = await http("POST", GROQ + "/chat/completions", opts.groqKey, JSON.stringify(body), tmo);
+      }
       if (res.status === 200) {
         const j = JSON.parse(res.text);
-        const text = ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-        if (!text) { busy++; continue; }
+        const ch = j.choices && j.choices[0];
+        const text = ((ch && ch.message && ch.message.content) || "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+        if (!text || (ch && ch.finish_reason === "length")) { busy++; continue; }   // empty or cut off: try next model
+        if (opts.json) { try { parseJSON(text); } catch (e) { bad++; continue; } } // unreadable JSON: try next model
         if (m !== opts.groqModel && opts.onModel) opts.onModel("groq", m);
         return text;
       }
       if (res.status === 0 && res.text !== "timeout") throw new Error("NETWORK");
       if (res.status === 401 || /invalid_api_key|Invalid API Key/i.test(res.text)) throw new Error("BADKEY_GROQ");
-      if (res.status === 429) { quota++; continue; }   // limits are per model, so the next model may still work
+      if (res.status === 429 || res.status === 413) { quota++; continue; }   // limits are per model: try the next one
       if (isBusy(res)) { busy++; continue; }
-      if (res.status === 404 || res.status === 400 && /model/i.test(res.text)) continue;
-      if (res.status === 413 || (res.status === 400 && /token|context/i.test(res.text))) { busy++; continue; }
+      if (res.status === 404 || res.status === 400) { bad++; continue; }
       throw new Error("Groq: " + errMsg(res));
     }
     if (quota) throw new Error("RATE");
-    if (busy) throw new Error("BUSY");
+    if (busy || bad) throw new Error("BUSY");
     throw new Error(res ? "Groq: " + errMsg(res) : "No Groq model available");
   }
 
