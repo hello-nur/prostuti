@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
                     c = (HttpURLConnection) new URL(url).openConnection();
                     c.setRequestMethod("POST".equals(method) ? "POST" : "GET");
                     c.setConnectTimeout(20000);
-                    c.setReadTimeout(85000);
+                    c.setReadTimeout(80000);
                     c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                     if (key != null && !key.isEmpty()) c.setRequestProperty("x-goog-api-key", key);
                     if ("POST".equals(method)) {

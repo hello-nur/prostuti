@@ -1,0 +1,46 @@
+name: Real AI test
+
+# Runs when a commit message contains [ai-test], or by hand from the Actions tab.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[ai-test]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install headless browser
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - name: Run the app against real Gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python tests/ai_real_test.py web
+      - name: Show results on the run page
+        if: always()
+        run: cat test-results/results.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Package screenshots
+        if: always()
+        run: cd test-results && zip -q ../ai-test-screens.zip *.png || true
+      - name: Publish results
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ai-test-${{ github.run_number }}
+          name: AI test ${{ github.run_number }}
+          prerelease: true
+          body_path: test-results/results.md
+          files: |
+            test-results/results.md
+            ai-test-screens.zip

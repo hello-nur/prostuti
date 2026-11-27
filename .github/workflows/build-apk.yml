@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   build:
+    # Commits marked [ai-test] only run the AI test, not a new APK.
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[ai-test]')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

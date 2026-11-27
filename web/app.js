@@ -401,7 +401,7 @@ async function aiGenerate(s, c, n, diff) {
   const dmap = { easy: "easy, knowledge-level", medium: "board-exam standard (mix of knowledge, comprehension and application)", hard: "hard, admission-test standard with tricky distractors" };
   try {
     const out = await AI.generate({
-      key: apiKey(), model: S.settings.model, system: sysPrompt(s), json: true, schema: AI.MCQ_SCHEMA, temperature: 0.9,
+      key: apiKey(), model: S.settings.model, system: sysPrompt(s), json: true, schema: AI.MCQ_SCHEMA, temperature: 0.9, timeout: 60000,
       onModel: m => { S.settings.model = m; save(); },
       prompt: "Create " + n + " different " + dmap[diff] + " multiple-choice questions for the subject '" + SUB[s].en + "', chapter '" + SUB[s].ch[c] + "'. " +
         "Cover different topics of the chapter; avoid trivial or repeated questions. Each item: q (question), options (exactly 4 short options, no letter prefixes), answer (0-based index of the single correct option), explanation (1–3 sentences why it is correct). Vary the position of the correct answer."
@@ -643,7 +643,7 @@ ACT.mockStart = async () => {
   try {
     const subs = m.subs.map(s => SUB[s].en + " (chapters: " + SUB[s].ch.join("; ") + ")").join("\n");
     const out = await AI.generate({
-      key: apiKey(), model: S.settings.model, system: sysPrompt(m.subs.length === 1 ? m.subs[0] : "mix"), json: true, temperature: 0.9,
+      key: apiKey(), model: S.settings.model, system: sysPrompt(m.subs.length === 1 ? m.subs[0] : "mix"), json: true, temperature: 0.9, timeout: 75000,
       onModel: x => { S.settings.model = x; save(); },
       schema: { type: "ARRAY", items: { type: "OBJECT", properties: { subject: { type: "STRING" }, chapter: { type: "INTEGER" }, q: { type: "STRING" }, options: { type: "ARRAY", items: { type: "STRING" } }, answer: { type: "INTEGER" }, explanation: { type: "STRING" } }, required: ["subject", "chapter", "q", "options", "answer", "explanation"] } },
       prompt: "Create a " + n + "-question MCQ model test paper" + (m.neg ? " in university admission style" : " in Bangladesh board exam style") + ", spread across these subjects:\n" + subs +
@@ -684,7 +684,7 @@ async function loadCQ(p) {
   const lang = contentLang(p.s);
   try {
     const d = await AI.generate({
-      key: apiKey(), model: S.settings.model, system: sysPrompt(p.s), json: true, schema: AI.CQ_SCHEMA, temperature: 0.9,
+      key: apiKey(), model: S.settings.model, system: sysPrompt(p.s), json: true, schema: AI.CQ_SCHEMA, temperature: 0.9, timeout: 60000,
       onModel: m => { S.settings.model = m; save(); },
       prompt: "Create one Bangladesh board-standard creative question (srijonshil prosno) for '" + SUB[p.s].en + "', chapter '" + SUB[p.s].ch[p.c] + "'. " +
         "stem: a realistic stimulus of 3–6 sentences (may include data, an experiment, a situation or a described figure). parts: exactly 4 items with labels " + (lang === "bn" ? "ক, খ, গ, ঘ" : "a, b, c, d") +

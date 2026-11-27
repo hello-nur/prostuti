@@ -20,24 +20,25 @@ window.AI = (function () {
     p({ status: status, text: text });
   };
 
-  function http(method, url, key, body) {
+  function http(method, url, key, body, tmo) {
+    tmo = tmo || 25000;
     if (window.AndroidBridge && window.AndroidBridge.request) {
       return new Promise(function (resolve) {
         const id = "r" + (++cbSeq);
         pending[id] = resolve;
         window.AndroidBridge.request(id, method, url, key, body || "");
-        setTimeout(function () { if (pending[id]) { delete pending[id]; resolve({ status: 0, text: "timeout" }); } }, 90000);
+        setTimeout(function () { if (pending[id]) { delete pending[id]; resolve({ status: 0, text: "timeout" }); } }, tmo);
       });
     }
     const ctl = new AbortController();
-    const t = setTimeout(function () { ctl.abort(); }, 90000);
+    const t = setTimeout(function () { ctl.abort(); }, tmo);
     return fetch(url, {
       method: method,
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: method === "POST" ? body : undefined,
       signal: ctl.signal
     }).then(function (r) { return r.text().then(function (t2) { clearTimeout(t); return { status: r.status, text: t2 }; }); })
-      .catch(function (e) { clearTimeout(t); return { status: 0, text: String(e && e.message || e) }; });
+      .catch(function (e) { clearTimeout(t); return { status: 0, text: (e && e.name === "AbortError") ? "timeout" : String(e && e.message || e) }; });
   }
 
   function errMsg(res) {
@@ -85,15 +86,26 @@ window.AI = (function () {
         last.text = (opts.system ? opts.system + "\n\n" : "") + last.text + (opts.json ? "\n\nReply with ONLY valid JSON, no other text." : "");
         b = { contents: c, generationConfig: { temperature: body.generationConfig.temperature } };
       }
-      return http("POST", BASE + "/models/" + encodeURIComponent(m) + ":generateContent", opts.key, JSON.stringify(b));
+      return http("POST", BASE + "/models/" + encodeURIComponent(m) + ":generateContent", opts.key, JSON.stringify(thinkCfg(m, b)), tmo);
+    };
+    // Flash models "think" before answering by default, which is slow. Turn it down when the model allows it.
+    const noThink = {};
+    const thinkCfg = function (m, b) {
+      if (noThink[m] || /gemma/.test(m)) return b;
+      const c = JSON.parse(JSON.stringify(b));
+      if (/gemini-2\.5/.test(m)) c.generationConfig.thinkingConfig = { thinkingBudget: /pro/.test(m) ? 128 : 0 };
+      else if (/gemini-(3|flash-latest|flash-lite-latest)/.test(m)) c.generationConfig.thinkingConfig = { thinkingLevel: "low" };
+      return c;
     };
     const isBusy = function (r) { return r.status === 503 || r.status === 500 || r.status === 502 || r.status === 504 || (r.status === 0 && r.text === "timeout"); };
     const isModelErr = function (r) { return r.status === 404 || (r.status === 400 && /model/i.test(r.text) && !/API key/i.test(r.text)); };
 
+    const tmo = opts.timeout || 25000; // per model attempt
     const queue = [opts.model || DEFAULT_MODEL];
     const tried = {};
-    let listed = false, res = null, used = null, sawRate = false, sawBusy = false;
-    for (let step = 0; step < 8; step++) {
+    let listed = false, res = null, used = null, sawRate = false, sawBusy = false, sawSlow = false;
+    const deadline = Date.now() + Math.max(50000, tmo * 2);
+    for (let step = 0; step < 8 && Date.now() < deadline; step++) {
       let m = null;
       for (let i = 0; i < queue.length; i++) if (!tried[queue[i]]) { m = queue[i]; break; }
       if (!m) {
@@ -104,12 +116,13 @@ window.AI = (function () {
       }
       tried[m] = true;
       res = await send(m);
-      if (isBusy(res)) { await sleep(1200); res = await send(m); }
+      if (isBusy(res) && res.text !== "timeout" && Date.now() < deadline - tmo) { await sleep(1000); res = await send(m); }
+      if (res.status === 400 && /thinking/i.test(res.text) && !noThink[m]) { noThink[m] = true; res = await send(m); }
       if (res.status === 200) { used = m; break; }
       if (res.status === 0 && res.text !== "timeout") throw new Error("NETWORK");
       if (/API key not valid|API_KEY_INVALID|API key expired/i.test(res.text) || res.status === 401) throw new Error("BADKEY");
       if (res.status === 429) { sawRate = true; continue; }
-      if (isBusy(res)) { sawBusy = true; continue; }
+      if (isBusy(res)) { sawBusy = true; if (res.text === "timeout") sawSlow = true; continue; }
       if (isModelErr(res) || res.status === 403) continue;
       throw new Error(errMsg(res)); // a real bad request: don't hammer other models
     }
