@@ -1,11 +1,16 @@
-/* Prostuti — Gemini (free tier) client.
-   In the Android app, requests go through the native bridge (window.AndroidBridge) so there are no CORS limits.
-   In a normal browser it falls back to fetch(). */
+/* Prostuti — free AI client: Groq (fast, generous free tier) + Google Gemini (free tier).
+   The app tries Groq first (if a Groq key is set), then Gemini, and switches automatically
+   when one is busy, out of free quota or slow.
+   In the Android app, requests go through the native bridge (window.AndroidBridge) so there are
+   no CORS limits. In a normal browser it falls back to fetch(). */
 window.AI = (function () {
-  const BASE = "https://generativelanguage.googleapis.com/v1beta";
+  const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
+  const GROQ = "https://api.groq.com/openai/v1";
   const DEFAULT_MODEL = "gemini-flash-latest";
+  const GROQ_MODELS = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "qwen/qwen3-32b"];
   let cbSeq = 0;
   const pending = {};
+  const cooldown = {}; // provider -> time until which we skip it (after quota / overload errors)
 
   // Called by the Android side: status code + base64(UTF-8 body)
   window.__bridgeCb = function (id, status, b64) {
@@ -32,119 +37,196 @@ window.AI = (function () {
     }
     const ctl = new AbortController();
     const t = setTimeout(function () { ctl.abort(); }, tmo);
-    return fetch(url, {
-      method: method,
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: method === "POST" ? body : undefined,
-      signal: ctl.signal
-    }).then(function (r) { return r.text().then(function (t2) { clearTimeout(t); return { status: r.status, text: t2 }; }); })
+    const headers = { "Content-Type": "application/json" };
+    if (url.indexOf(GROQ) === 0) headers.Authorization = "Bearer " + key; else headers["x-goog-api-key"] = key;
+    return fetch(url, { method: method, headers: headers, body: method === "POST" ? body : undefined, signal: ctl.signal })
+      .then(function (r) { return r.text().then(function (t2) { clearTimeout(t); return { status: r.status, text: t2 }; }); })
       .catch(function (e) { clearTimeout(t); return { status: 0, text: (e && e.name === "AbortError") ? "timeout" : String(e && e.message || e) }; });
   }
 
   function errMsg(res) {
-    if (res.status === 0) return "NETWORK";
+    if (res.status === 0) return res.text === "timeout" ? "BUSY" : "NETWORK";
     try { const j = JSON.parse(res.text); return (j.error && j.error.message) || ("HTTP " + res.status); }
     catch (e) { return "HTTP " + res.status; }
   }
+  const sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  const isBusy = function (r) { return r.status === 503 || r.status === 500 || r.status === 502 || r.status === 504 || r.status === 498 || (r.status === 0 && r.text === "timeout"); };
 
-  // All usable Flash models for this key, best first (model names change often, so we ask Google).
+  // Turn a Gemini-style schema into a short JSON example for providers without schema support.
+  function schemaHint(s) {
+    if (!s) return "";
+    const ex = function (n) {
+      if (n.type === "ARRAY") return [ex(n.items)];
+      if (n.type === "OBJECT") { const o = {}; Object.keys(n.properties).forEach(function (k) { o[k] = ex(n.properties[k]); }); return o; }
+      if (n.type === "INTEGER") return 0;
+      return "...";
+    };
+    return JSON.stringify(ex(s));
+  }
+
+  /* ---------------- Gemini ---------------- */
   let modelCache = null;
-  async function listModels(key) {
+  async function listGemini(key) {
     if (modelCache) return modelCache;
-    const res = await http("GET", BASE + "/models?pageSize=200", key);
+    const res = await http("GET", GEMINI + "/models?pageSize=200", key, "", 15000);
     if (res.status !== 200) throw new Error(errMsg(res));
     const all = (JSON.parse(res.text).models || []).filter(function (m) {
       const n = m.name || "";
       return (m.supportedGenerationMethods || []).indexOf("generateContent") >= 0 &&
-        /(flash|gemma)/.test(n) && !/(image|tts|live|audio|embed|vision|transcribe|translate|native)/.test(n);
+        /flash/.test(n) && !/(image|tts|live|audio|embed|vision|transcribe|translate|native|omni)/.test(n);
     });
     const ver = function (n) { const m = n.match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
-    const rank = function (n) { return (/gemma/.test(n) ? 4 : 0) + (/(preview|exp)/.test(n) ? 2 : 0) + (/lite/.test(n) ? 1 : 0); };
+    const rank = function (n) { return (/(preview|exp)/.test(n) ? 2 : 0) + (/lite/.test(n) ? 1 : 0); };
     all.sort(function (a, b) { return (rank(a.name) - rank(b.name)) || (ver(b.name) - ver(a.name)); });
     modelCache = all.map(function (m) { return m.name.replace(/^models\//, ""); });
     return modelCache;
   }
-  async function discoverModel(key) { const l = await listModels(key); if (!l.length) throw new Error("No model available"); return l[0]; }
-  const sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
-  async function generate(opts) {
-    // opts: {key, model, system, prompt, history:[{role,text}], json:bool, schema, temperature, onModel}
-    if (!opts.key) throw new Error("NOKEY");
+  async function gemini(opts, tmo, deadline) {
     const contents = (opts.history || []).map(function (h) { return { role: h.role === "user" ? "user" : "model", parts: [{ text: h.text }] }; });
     contents.push({ role: "user", parts: [{ text: opts.prompt }] });
-    const body = { contents: contents, generationConfig: { temperature: opts.temperature == null ? 0.7 : opts.temperature } };
-    if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
-    if (opts.json) {
-      body.generationConfig.responseMimeType = "application/json";
-      if (opts.schema) body.generationConfig.responseSchema = opts.schema;
-    }
-    const send = function (m) {
-      let b = body;
-      if (/gemma/.test(m)) { // Gemma models: no system field / JSON mode, so fold them into the prompt
-        const c = JSON.parse(JSON.stringify(contents));
-        const last = c[c.length - 1].parts[0];
-        last.text = (opts.system ? opts.system + "\n\n" : "") + last.text + (opts.json ? "\n\nReply with ONLY valid JSON, no other text." : "");
-        b = { contents: c, generationConfig: { temperature: body.generationConfig.temperature } };
-      }
-      return http("POST", BASE + "/models/" + encodeURIComponent(m) + ":generateContent", opts.key, JSON.stringify(thinkCfg(m, b)), tmo);
-    };
-    // Flash models "think" before answering by default, which is slow. Turn it down when the model allows it.
+    const base = { contents: contents, generationConfig: { temperature: opts.temperature == null ? 0.7 : opts.temperature } };
+    if (opts.system) base.systemInstruction = { parts: [{ text: opts.system }] };
+    if (opts.json) { base.generationConfig.responseMimeType = "application/json"; if (opts.schema) base.generationConfig.responseSchema = opts.schema; }
     const noThink = {};
-    const thinkCfg = function (m, b) {
-      if (noThink[m] || /gemma/.test(m)) return b;
-      const c = JSON.parse(JSON.stringify(b));
-      if (/gemini-2\.5/.test(m)) c.generationConfig.thinkingConfig = { thinkingBudget: /pro/.test(m) ? 128 : 0 };
-      else if (/gemini-(3|flash-latest|flash-lite-latest)/.test(m)) c.generationConfig.thinkingConfig = { thinkingLevel: "low" };
-      return c;
+    const send = function (m) {
+      const b = JSON.parse(JSON.stringify(base));
+      if (!noThink[m]) { // Flash models "think" first by default, which is slow
+        if (/gemini-2\.5/.test(m)) b.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+        else if (/gemini-(3|flash-latest|flash-lite-latest)/.test(m)) b.generationConfig.thinkingConfig = { thinkingLevel: "low" };
+      }
+      return http("POST", GEMINI + "/models/" + encodeURIComponent(m) + ":generateContent", opts.key, JSON.stringify(b), tmo);
     };
-    const isBusy = function (r) { return r.status === 503 || r.status === 500 || r.status === 502 || r.status === 504 || (r.status === 0 && r.text === "timeout"); };
-    const isModelErr = function (r) { return r.status === 404 || (r.status === 400 && /model/i.test(r.text) && !/API key/i.test(r.text)); };
-
-    const tmo = opts.timeout || 25000; // per model attempt
     const queue = [opts.model || DEFAULT_MODEL];
     const tried = {};
-    let listed = false, res = null, used = null, sawRate = false, sawBusy = false, sawSlow = false;
-    const deadline = Date.now() + Math.max(50000, tmo * 2);
-    for (let step = 0; step < 8 && Date.now() < deadline; step++) {
+    let listed = false, res = null, quota = 0, busy = 0, attempts = 0;
+    while (attempts < 4 && Date.now() < deadline) {
       let m = null;
       for (let i = 0; i < queue.length; i++) if (!tried[queue[i]]) { m = queue[i]; break; }
       if (!m) {
         if (listed) break;
         listed = true;
-        try { (await listModels(opts.key)).forEach(function (x) { if (queue.indexOf(x) < 0) queue.push(x); }); } catch (e) { break; }
+        try { (await listGemini(opts.key)).forEach(function (x) { if (queue.indexOf(x) < 0) queue.push(x); }); } catch (e) { break; }
         continue;
       }
-      tried[m] = true;
+      tried[m] = true; attempts++;
       res = await send(m);
-      if (isBusy(res) && res.text !== "timeout" && Date.now() < deadline - tmo) { await sleep(1000); res = await send(m); }
-      if (res.status === 400 && /thinking/i.test(res.text) && !noThink[m]) { noThink[m] = true; res = await send(m); }
-      if (res.status === 200) { used = m; break; }
+      if (res.status === 400 && /thinking/i.test(res.text)) { noThink[m] = true; res = await send(m); }
+      if (res.status === 200) {
+        const j = JSON.parse(res.text);
+        const cand = j.candidates && j.candidates[0];
+        const parts = (cand && cand.content && cand.content.parts) || [];
+        const text = parts.filter(function (p) { return !p.thought && p.text; }).map(function (p) { return p.text; }).join("");
+        if (!text) throw new Error((cand && cand.finishReason) ? "Blocked: " + cand.finishReason : "Empty response");
+        if (m !== opts.model && opts.onModel) opts.onModel("gemini", m);
+        return text;
+      }
       if (res.status === 0 && res.text !== "timeout") throw new Error("NETWORK");
-      if (/API key not valid|API_KEY_INVALID|API key expired/i.test(res.text) || res.status === 401) throw new Error("BADKEY");
-      if (res.status === 429) { sawRate = true; continue; }
-      if (isBusy(res)) { sawBusy = true; if (res.text === "timeout") sawSlow = true; continue; }
-      if (isModelErr(res) || res.status === 403) continue;
-      throw new Error(errMsg(res)); // a real bad request: don't hammer other models
+      if (res.status === 401 || /API key not valid|API_KEY_INVALID|API key expired/i.test(res.text)) throw new Error("BADKEY");
+      if (res.status === 429) { if (++quota >= 2) break; continue; }   // free quota used up: don't hammer
+      if (isBusy(res)) { busy++; continue; }
+      if (res.status === 404 || res.status === 403 || (res.status === 400 && /model/i.test(res.text))) continue;
+      throw new Error(errMsg(res));
     }
-    if (!used) {
-      if (sawBusy) throw new Error("BUSY");
-      if (sawRate) throw new Error("RATE");
-      if (res && /PERMISSION_DENIED/i.test(res.text)) throw new Error("BADKEY");
-      throw new Error(res ? errMsg(res) : "No model available");
+    if (quota) throw new Error("RATE");
+    if (busy) throw new Error("BUSY");
+    throw new Error(res ? errMsg(res) : "No Gemini model available");
+  }
+
+  /* ---------------- Groq (OpenAI-compatible) ---------------- */
+  let groqList = null;
+  async function groqModels(key) {
+    if (groqList) return groqList;
+    groqList = GROQ_MODELS.slice();
+    try {
+      const res = await http("GET", GROQ + "/models", key, "", 15000);
+      if (res.status === 200) {
+        const ids = (JSON.parse(res.text).data || []).map(function (m) { return m.id; });
+        const ok = GROQ_MODELS.filter(function (m) { return ids.indexOf(m) >= 0; });
+        const extra = ids.filter(function (id) { return /(gpt-oss|llama-3\.3|llama-4|qwen)/.test(id) && !/(guard|whisper|tts|vision|safeguard)/.test(id) && ok.indexOf(id) < 0; });
+        if (ok.length || extra.length) groqList = ok.concat(extra);
+      }
+    } catch (e) {}
+    return groqList;
+  }
+
+  async function groq(opts, tmo, deadline) {
+    const msgs = [];
+    let sys = opts.system || "";
+    if (opts.json) sys += (sys ? "\n\n" : "") + "Reply with ONLY valid JSON (no markdown, no extra text)" + (opts.schema ? " in exactly this shape: " + schemaHint(opts.schema) : "") + ".";
+    if (sys) msgs.push({ role: "system", content: sys });
+    (opts.history || []).forEach(function (h) { msgs.push({ role: h.role === "user" ? "user" : "assistant", content: h.text }); });
+    msgs.push({ role: "user", content: opts.prompt });
+    const list = await groqModels(opts.groqKey);
+    const order = opts.groqModel ? [opts.groqModel].concat(list.filter(function (m) { return m !== opts.groqModel; })) : list;
+    let res = null, quota = 0, busy = 0;
+    for (let i = 0; i < order.length && i < 3 && Date.now() < deadline; i++) {
+      const m = order[i];
+      const body = { model: m, messages: msgs, temperature: opts.temperature == null ? 0.7 : opts.temperature, max_completion_tokens: opts.json ? 8000 : 2500 };
+      if (/gpt-oss/.test(m)) body.reasoning_effort = "low";
+      if (/qwen3/.test(m)) body.reasoning_format = "hidden";
+      res = await http("POST", GROQ + "/chat/completions", opts.groqKey, JSON.stringify(body), tmo);
+      if (res.status === 200) {
+        const j = JSON.parse(res.text);
+        const text = ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+        if (!text) { busy++; continue; }
+        if (m !== opts.groqModel && opts.onModel) opts.onModel("groq", m);
+        return text;
+      }
+      if (res.status === 0 && res.text !== "timeout") throw new Error("NETWORK");
+      if (res.status === 401 || /invalid_api_key|Invalid API Key/i.test(res.text)) throw new Error("BADKEY_GROQ");
+      if (res.status === 429) { quota++; continue; }   // limits are per model, so the next model may still work
+      if (isBusy(res)) { busy++; continue; }
+      if (res.status === 404 || res.status === 400 && /model/i.test(res.text)) continue;
+      if (res.status === 413 || (res.status === 400 && /token|context/i.test(res.text))) { busy++; continue; }
+      throw new Error("Groq: " + errMsg(res));
     }
-    if (used !== opts.model && opts.onModel) opts.onModel(used);
-    const j = JSON.parse(res.text);
-    const cand = j.candidates && j.candidates[0];
-    const parts = (cand && cand.content && cand.content.parts) || [];
-    const text = parts.filter(function (p) { return !p.thought && p.text; }).map(function (p) { return p.text; }).join("");
-    if (!text) throw new Error((cand && cand.finishReason) ? "Blocked: " + cand.finishReason : "Empty response");
-    if (!opts.json) return text;
-    return parseJSON(text);
+    if (quota) throw new Error("RATE");
+    if (busy) throw new Error("BUSY");
+    throw new Error(res ? "Groq: " + errMsg(res) : "No Groq model available");
+  }
+
+  /* ---------------- public: try each available service in turn ---------------- */
+  async function generate(opts) {
+    // opts: {key (Gemini), groqKey, model, groqModel, system, prompt, history, json, schema, temperature, timeout, onModel(provider, model)}
+    const providers = [];
+    if (opts.groqKey) providers.push("groq");
+    if (opts.key) providers.push("gemini");
+    if (!providers.length) throw new Error("NOKEY");
+    const now = Date.now();
+    // Skip a service that just ran out of quota / was overloaded, unless it is the only one
+    const ready = providers.filter(function (p) { return !(cooldown[p] > now); });
+    const order = ready.length ? ready.concat(providers.filter(function (p) { return ready.indexOf(p) < 0; })) : providers;
+    const tmo = opts.timeout || 25000;
+    const deadline = Date.now() + Math.max(55000, tmo * 2);
+    const errors = [];
+    for (let i = 0; i < order.length; i++) {
+      const p = order[i];
+      if (i > 0 && Date.now() > deadline - 8000) break;
+      try {
+        const text = p === "groq" ? await groq(opts, tmo, deadline) : await gemini(opts, tmo, deadline);
+        if (opts.json) return parseJSON(text);
+        return text;
+      } catch (e) {
+        const m = String(e && e.message || e);
+        if (m === "NETWORK") throw e;
+        if (m === "RATE") cooldown[p] = Date.now() + 60000;
+        if (m === "BUSY") cooldown[p] = Date.now() + 20000;
+        errors.push({ p: p, m: m });
+      }
+    }
+    // Report the most useful error
+    const has = function (x) { return errors.some(function (e) { return e.m === x; }); };
+    if (errors.length === 1) throw new Error(errors[0].m);
+    if (has("BUSY")) throw new Error("BUSY");
+    if (has("RATE")) throw new Error("RATE");
+    throw new Error(errors.map(function (e) { return e.m; }).join(" · "));
   }
 
   function parseJSON(text) {
-    try { return JSON.parse(text); } catch (e) {}
-    const m = text.match(/[\[{][\s\S]*[\]}]/);
+    const t = String(text).replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+    try { return JSON.parse(t); } catch (e) {}
+    const m = t.match(/[\[{][\s\S]*[\]}]/);
     if (m) { try { return JSON.parse(m[0]); } catch (e) {} }
     throw new Error("Bad JSON from AI");
   }
@@ -179,5 +261,5 @@ window.AI = (function () {
     required: ["stem", "parts"]
   };
 
-  return { generate: generate, discoverModel: discoverModel, MCQ_SCHEMA: MCQ_SCHEMA, CQ_SCHEMA: CQ_SCHEMA, DEFAULT_MODEL: DEFAULT_MODEL, isNative: function () { return !!window.AndroidBridge; } };
+  return { generate: generate, MCQ_SCHEMA: MCQ_SCHEMA, CQ_SCHEMA: CQ_SCHEMA, DEFAULT_MODEL: DEFAULT_MODEL, isNative: function () { return !!window.AndroidBridge; } };
 })();

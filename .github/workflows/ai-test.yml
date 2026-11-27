@@ -26,6 +26,7 @@ jobs:
       - name: Run the app against real Gemini
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python tests/ai_real_test.py web
       - name: Show results on the run page
         if: always()

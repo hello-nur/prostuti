@@ -70,6 +70,10 @@ function examLabel() {
 const examDate = () => S.settings.examDate || C.DEFAULT_DATES[P().exam] || "";
 const defaultNeg = () => (P().exam === "ADM" ? ((C.EXAMS.ADM.targets[P().target] || {}).neg || 0) : 0);
 const apiKey = () => S.settings.apiKey || CFG.apiKey || "";
+const groqKey = () => S.settings.groqKey || CFG.groqKey || "";
+const hasAI = () => !!(apiKey() || groqKey());
+const saveModel = (p, m) => { if (p === "groq") S.settings.groqModel = m; else S.settings.model = m; save(); };
+const aiKeys = () => ({ key: apiKey(), groqKey: groqKey(), model: S.settings.model, groqModel: S.settings.groqModel, onModel: saveModel });
 const contentLang = (sid) => (sid === "ban" ? "bn" : sid === "eng" ? "en" : (P().version || "bn"));
 
 /* ---------------- stats ---------------- */
@@ -363,25 +367,27 @@ ACT.cqSub = d => { closeModal(); go("subject", { id: d.s }); toast(L("Tap a chap
 
 /* ---------- AI: generate MCQs ---------- */
 function needKey() {
-  if (apiKey()) return false;
-  modal('<h2 style="margin:0 0 6px;font-size:19px">✨ ' + L("Turn on AI (free)", "AI চালু করো (ফ্রি)") + '</h2><p class="small mute" style="margin:0 0 10px">' + L("AI features use Google Gemini's free API. You need a free key once:", "AI ফিচার Google Gemini-এর ফ্রি API ব্যবহার করে। একবার একটি ফ্রি কী লাগবে:") + "</p>" + keySteps() +
+  if (hasAI()) return false;
+  modal('<h2 style="margin:0 0 6px;font-size:19px">✨ ' + L("Turn on AI (free)", "AI চালু করো (ফ্রি)") + '</h2><p class="small mute" style="margin:0 0 10px">' + L("AI features use free AI services (Groq and Google Gemini). You need a free key once:", "AI ফিচার ফ্রি AI সার্ভিস (Groq ও Google Gemini) ব্যবহার করে। একবার একটি ফ্রি কী লাগবে:") + "</p>" + keySteps() +
     '<button class="btn block" style="margin-top:12px" data-a="toSettings">' + L("Add my key", "কী যোগ করো") + "</button>");
   return true;
 }
 function keySteps() {
-  return '<ol class="small" style="padding-inline-start:20px;margin:0">' +
-    "<li>" + L("Open", "খোলো") + ' <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></li>' +
-    "<li>" + L("Sign in with any Google account", "যেকোনো Google অ্যাকাউন্ট দিয়ে সাইন ইন করো") + "</li>" +
-    "<li>" + L("Tap “Create API key” and copy it", "“Create API key” চাপো এবং কপি করো") + "</li>" +
-    "<li>" + L("Paste it in Settings → AI key", "সেটিংস → AI কী-তে পেস্ট করো") + "</li></ol>";
+  return '<p class="small" style="margin:0 0 6px"><b>' + L("Recommended: Groq (fast, free)", "প্রস্তাবিত: Groq (দ্রুত, ফ্রি)") + "</b></p>" +
+    '<ol class="small" style="padding-inline-start:20px;margin:0 0 8px">' +
+    "<li>" + L("Open", "খোলো") + ' <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a> ' + L("and sign in with Google", "এবং Google দিয়ে সাইন ইন করো") + "</li>" +
+    "<li>" + L("Tap “Create API Key” and copy it", "“Create API Key” চাপো এবং কপি করো") + "</li>" +
+    "<li>" + L("Paste it in Settings → Groq key", "সেটিংস → Groq কী-তে পেস্ট করো") + "</li></ol>" +
+    '<p class="tiny mute" style="margin:0">' + L("Optional backup: a Google Gemini key from", "ঐচ্ছিক ব্যাকআপ: Google Gemini কী —") + ' <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a></p>';
 }
 ACT.toSettings = () => { closeModal(); go("settings"); };
 function aiErr(e) {
   const m = String(e && e.message || e);
-  if (m === "NOKEY") return L("Add your free Gemini key in Settings.", "সেটিংসে তোমার ফ্রি Gemini কী দাও।");
-  if (m === "BADKEY") return L("Your AI key is not valid. Check it in Settings.", "AI কী সঠিক নয়। সেটিংসে দেখো।");
-  if (m === "BUSY") return L("Google's free AI is very busy right now (all free models tried). Please try again in a minute.", "Google-এর ফ্রি AI এখন খুব ব্যস্ত (সব ফ্রি মডেল চেষ্টা করা হয়েছে)। এক মিনিট পর আবার চেষ্টা করো।");
-  if (m === "RATE") return L("Free AI limit reached for now. Try again in a minute (or tomorrow).", "এখনকার ফ্রি সীমা শেষ। এক মিনিট পর (বা কাল) আবার চেষ্টা করো।");
+  if (m === "NOKEY") return L("Add a free AI key (Groq or Gemini) in Settings.", "সেটিংসে একটি ফ্রি AI কী (Groq বা Gemini) দাও।");
+  if (m === "BADKEY_GROQ") return L("Your Groq key is not valid. Check it in Settings.", "Groq কী সঠিক নয়। সেটিংসে দেখো।");
+  if (m === "BADKEY") return L("Your Gemini key is not valid. Check it in Settings.", "Gemini কী সঠিক নয়। সেটিংসে দেখো।");
+  if (m === "BUSY") return L("The free AI is very busy right now. Please try again in a minute." + (groqKey() ? "" : " Tip: add a free Groq key in Settings — it is faster and more reliable."), "ফ্রি AI এখন খুব ব্যস্ত। এক মিনিট পর আবার চেষ্টা করো।" + (groqKey() ? "" : " পরামর্শ: সেটিংসে একটি ফ্রি Groq কী দাও — এটি দ্রুত ও বেশি নির্ভরযোগ্য।"));
+  if (m === "RATE") return L("Free AI limit reached for now. Try again in a minute (or tomorrow)." + (groqKey() && apiKey() ? "" : " Adding a second free key (Groq or Gemini) in Settings helps."), "এখনকার ফ্রি সীমা শেষ। এক মিনিট পর (বা কাল) আবার চেষ্টা করো।" + (groqKey() && apiKey() ? "" : " সেটিংসে দ্বিতীয় একটি ফ্রি কী (Groq বা Gemini) দিলে সুবিধা হবে।"));
   if ((m === "NETWORK" || /fetch|network/i.test(m)) && !AI.isNative() && navigator.onLine) return L("AI can't connect from this web preview — it works in the Android app.", "এই ওয়েব প্রিভিউ থেকে AI সংযোগ হয় না — অ্যান্ড্রয়েড অ্যাপে কাজ করবে।");
   if (m === "NETWORK" || /fetch|network|timeout/i.test(m)) return L("No internet connection. Built-in questions still work offline.", "ইন্টারনেট সংযোগ নেই। বিল্ট-ইন প্রশ্ন অফলাইনে চলবে।");
   return L("AI error: ", "AI সমস্যা: ") + m;
@@ -401,12 +407,11 @@ async function aiGenerate(s, c, n, diff) {
   const dmap = { easy: "easy, knowledge-level", medium: "board-exam standard (mix of knowledge, comprehension and application)", hard: "hard, admission-test standard with tricky distractors" };
   try {
     const out = await AI.generate({
-      key: apiKey(), model: S.settings.model, system: sysPrompt(s), json: true, schema: AI.MCQ_SCHEMA, temperature: 0.9, timeout: 60000,
-      onModel: m => { S.settings.model = m; save(); },
+      ...aiKeys(), system: sysPrompt(s), json: true, schema: AI.MCQ_SCHEMA, temperature: 0.9, timeout: 60000,
       prompt: "Create " + n + " different " + dmap[diff] + " multiple-choice questions for the subject '" + SUB[s].en + "', chapter '" + SUB[s].ch[c] + "'. " +
         "Cover different topics of the chapter; avoid trivial or repeated questions. Each item: q (question), options (exactly 4 short options, no letter prefixes), answer (0-based index of the single correct option), explanation (1–3 sentences why it is correct). Vary the position of the correct answer."
     });
-    const arr = (Array.isArray(out) ? out : (out.questions || [])).filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3);
+    const arr = (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])).filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3);
     if (!arr.length) throw new Error("AI returned no usable questions");
     const stamp = Date.now().toString(36);
     const qs = arr.map((x, i) => ({ id: "a" + stamp + i, s, c, q: String(x.q), o: x.options.map(String), a: Number(x.answer), e: String(x.explanation || ""), src: "ai", d: diff }));
@@ -513,7 +518,7 @@ ACT.qExplain = async () => {
     const opts = it.perm.map((oi, k) => letter(k, q) + ") " + q.o[oi]).join("\n");
     const mine = quiz.ans[i] != null ? letter(quiz.ans[i], q) : "-";
     const t = await AI.generate({
-      key: apiKey(), model: S.settings.model, system: sysPrompt(q.s), onModel: m => { S.settings.model = m; save(); }, temperature: 0.4,
+      ...aiKeys(), system: sysPrompt(q.s), temperature: 0.4,
       prompt: "Question: " + q.q + "\n" + opts + "\nCorrect answer: " + letter(it.perm.indexOf(q.a), q) + "\nStudent chose: " + mine +
         "\nExplain step by step why the correct answer is right" + (mine !== letter(it.perm.indexOf(q.a), q) ? " and why the student's choice is wrong" : "") +
         ". Add one quick memory tip. Keep it under 150 words, plain text, short lines."
@@ -643,15 +648,14 @@ ACT.mockStart = async () => {
   try {
     const subs = m.subs.map(s => SUB[s].en + " (chapters: " + SUB[s].ch.join("; ") + ")").join("\n");
     const out = await AI.generate({
-      key: apiKey(), model: S.settings.model, system: sysPrompt(m.subs.length === 1 ? m.subs[0] : "mix"), json: true, temperature: 0.9, timeout: 75000,
-      onModel: x => { S.settings.model = x; save(); },
+      ...aiKeys(), system: sysPrompt(m.subs.length === 1 ? m.subs[0] : "mix"), json: true, temperature: 0.9, timeout: 75000,
       schema: { type: "ARRAY", items: { type: "OBJECT", properties: { subject: { type: "STRING" }, chapter: { type: "INTEGER" }, q: { type: "STRING" }, options: { type: "ARRAY", items: { type: "STRING" } }, answer: { type: "INTEGER" }, explanation: { type: "STRING" } }, required: ["subject", "chapter", "q", "options", "answer", "explanation"] } },
       prompt: "Create a " + n + "-question MCQ model test paper" + (m.neg ? " in university admission style" : " in Bangladesh board exam style") + ", spread across these subjects:\n" + subs +
         "\nFor each item return: subject (exactly the English subject name given above), chapter (0-based index in that subject's chapter list), q, options (exactly 4), answer (0-based correct index), explanation (1–2 sentences). Vary difficulty and the correct answer position."
     });
     const byName = {}; m.subs.forEach(s => { byName[SUB[s].en.toLowerCase()] = s; });
     const stamp = Date.now().toString(36);
-    const qs = (Array.isArray(out) ? out : []).filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3).map((x, i) => {
+    const qs = (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])).filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3).map((x, i) => {
       const s = byName[String(x.subject || "").toLowerCase()] || m.subs[i % m.subs.length];
       const c = Math.max(0, Math.min(SUB[s].ch.length - 1, Number(x.chapter) || 0));
       return { id: "a" + stamp + "m" + i, s, c, q: String(x.q), o: x.options.map(String), a: Number(x.answer), e: String(x.explanation || ""), src: "ai" };
@@ -684,8 +688,7 @@ async function loadCQ(p) {
   const lang = contentLang(p.s);
   try {
     const d = await AI.generate({
-      key: apiKey(), model: S.settings.model, system: sysPrompt(p.s), json: true, schema: AI.CQ_SCHEMA, temperature: 0.9, timeout: 60000,
-      onModel: m => { S.settings.model = m; save(); },
+      ...aiKeys(), system: sysPrompt(p.s), json: true, schema: AI.CQ_SCHEMA, temperature: 0.9, timeout: 60000,
       prompt: "Create one Bangladesh board-standard creative question (srijonshil prosno) for '" + SUB[p.s].en + "', chapter '" + SUB[p.s].ch[p.c] + "'. " +
         "stem: a realistic stimulus of 3–6 sentences (may include data, an experiment, a situation or a described figure). parts: exactly 4 items with labels " + (lang === "bn" ? "ক, খ, গ, ঘ" : "a, b, c, d") +
         " — knowledge (1 mark), comprehension (2 marks), application (3 marks), higher-order ability (4 marks). answer: a full model answer as an examiner expects for those marks, with steps for calculations."
@@ -698,7 +701,7 @@ ACT.cqAgain = () => { const cur = stack[stack.length - 1]; replace("cq", { s: cu
 
 /* ---------- AI Tutor ---------- */
 VIEWS.tutor = function () {
-  const hasKey = !!apiKey();
+  const hasKey = hasAI();
   const chips = [
     L("Explain Newton's 3rd law with examples", "নিউটনের ৩য় সূত্র উদাহরণসহ বুঝিয়ে দাও"),
     L("Make me a 7-day study routine", "আমার জন্য ৭ দিনের পড়ার রুটিন বানাও"),
@@ -728,7 +731,7 @@ ACT.chatSend = async () => {
   const p = P();
   try {
     const t = await AI.generate({
-      key: apiKey(), model: S.settings.model, history: hist, temperature: 0.6, onModel: m => { S.settings.model = m; save(); },
+      ...aiKeys(), history: hist, temperature: 0.6,
       system: "You are 'Prostuti Tutor', a friendly, encouraging expert teacher for a Bangladeshi student preparing for " + (p.exam === "ADM" ? "university admission tests" : p.exam + " (" + ((C.GROUPS[p.group] || {}).en || "") + " group, " + (p.version === "en" ? "English" : "Bangla") + " version)") +
         ". Follow the NCTB syllabus. Explain step by step with simple examples. Reply in the same language the student writes in (Bangla, English or Banglish→Bangla). Keep answers short enough for a phone screen; use plain text, short paragraphs and simple lists, no tables, no LaTeX (use Unicode like x², √). If the question is outside studies, gently guide back to studies.",
       prompt: text
@@ -772,15 +775,15 @@ VIEWS.settings = function () {
     '<label class="f" for="sGoal">' + L("Daily goal (questions)", "দৈনিক লক্ষ্য (প্রশ্ন)") + '</label><select class="in" id="sGoal" data-ch="goal">' + [10, 20, 30, 50, 75, 100].map(x => "<option " + (x === st.goal ? "selected" : "") + ' value="' + x + '">' + N(x) + "</option>").join("") + "</select>" +
     '<label class="f" for="sDate">' + L("Exam start date", "পরীক্ষা শুরুর তারিখ") + '</label><input class="in" type="date" id="sDate" data-ch="examDate" value="' + esc(examDate()) + '">' +
     '<p class="tiny mute" style="margin:6px 0 0">' + L("Prefilled with the announced 2027 start date — change it if the board reschedules.", "২০২৭ সালের ঘোষিত শুরুর তারিখ দেওয়া আছে — বোর্ড পরিবর্তন করলে বদলে নাও।") + "</p></div>" +
-    '<div class="card"><h2>✨ ' + L("AI (Google Gemini — free)", "AI (Google Gemini — ফ্রি)") + "</h2>" +
-    (CFG.apiKey && !st.apiKey ? '<p class="small" style="margin:0 0 8px">✓ ' + L("A built-in key is active. You can add your own for higher limits.", "বিল্ট-ইন কী চালু আছে। বেশি ব্যবহারের জন্য নিজের কী দিতে পারো।") + "</p>" : keySteps()) +
-    '<label class="f" for="sKey">' + L("Your Gemini API key", "তোমার Gemini API কী") + '</label><input class="in" id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…" value="' + esc(st.apiKey) + '">' +
-    '<div class="grid2" style="margin-top:10px"><button class="btn" data-a="saveKey">' + L("Save key", "কী সংরক্ষণ") + '</button><button class="btn line" data-a="testKey">' + L("Test", "পরীক্ষা") + "</button></div>" +
-    '<p class="tiny mute" id="keyMsg" style="margin:8px 0 0">' + L("Model", "মডেল") + ": " + esc(st.model || AI.DEFAULT_MODEL) + " · " + L("chosen automatically", "স্বয়ংক্রিয়ভাবে নির্বাচিত") + "</p>" +
-    '<p class="tiny mute" style="margin:6px 0 0">' + L("Your key stays on this phone and is sent only to Google.", "তোমার কী শুধু এই ফোনে থাকে এবং শুধু Google-এ পাঠানো হয়।") + "</p></div>" +
+    '<div class="card"><h2>✨ ' + L("AI (free)", "AI (ফ্রি)") + "</h2>" + keySteps() +
+    '<label class="f" for="sGroq">' + L("Groq API key", "Groq API কী") + '</label><input class="in" id="sGroq" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…" value="' + esc(st.groqKey) + '">' +
+    '<label class="f" for="sKey">' + L("Google Gemini API key (optional backup)", "Google Gemini API কী (ঐচ্ছিক ব্যাকআপ)") + '</label><input class="in" id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…" value="' + esc(st.apiKey) + '">' +
+    '<div class="grid2" style="margin-top:10px"><button class="btn" data-a="saveKey">' + L("Save keys", "কী সংরক্ষণ") + '</button><button class="btn line" data-a="testKey">' + L("Test", "পরীক্ষা") + "</button></div>" +
+    '<div class="tiny mute" id="keyMsg" style="margin:8px 0 0;white-space:pre-line">' + L("The app uses Groq first, then Gemini, and switches automatically if one is busy.", "অ্যাপ প্রথমে Groq, তারপর Gemini ব্যবহার করে; একটি ব্যস্ত থাকলে নিজে থেকে অন্যটিতে যায়।") + "</div>" +
+    '<p class="tiny mute" style="margin:6px 0 0">' + L("Your keys stay on this phone and are sent only to Groq / Google.", "তোমার কী শুধু এই ফোনে থাকে এবং শুধু Groq / Google-এ পাঠানো হয়।") + "</p></div>" +
     '<div class="card"><h2>' + L("Data", "ডেটা") + '</h2><p class="small mute" style="margin:0 0 10px">' + N(BANK.length) + " " + L("built-in questions", "বিল্ট-ইন প্রশ্ন") + " · " + N(aiCount) + " " + L("saved AI questions", "সংরক্ষিত AI প্রশ্ন") + "</p>" +
     '<div class="grid2"><button class="btn line" data-a="clearAI" ' + (aiCount ? "" : "disabled") + ">" + L("Delete AI questions", "AI প্রশ্ন মুছো") + '</button><button class="btn line" style="color:var(--red)" data-a="resetAll">' + L("Reset everything", "সব রিসেট") + "</button></div></div>" +
-    '<p class="tiny mute" style="text-align:center">Prostuti v1.0 · ' + L("Built-in questions follow the NCTB syllabus; AI questions may occasionally contain mistakes — check with your textbook.", "বিল্ট-ইন প্রশ্ন NCTB সিলেবাস অনুযায়ী; AI প্রশ্নে মাঝে মাঝে ভুল থাকতে পারে — পাঠ্যবই মিলিয়ে নাও।") + "</p>";
+    '<p class="tiny mute" style="text-align:center">Prostuti v1.3 · ' + L("Built-in questions follow the NCTB syllabus; AI questions may occasionally contain mistakes — check with your textbook.", "বিল্ট-ইন প্রশ্ন NCTB সিলেবাস অনুযায়ী; AI প্রশ্নে মাঝে মাঝে ভুল থাকতে পারে — পাঠ্যবই মিলিয়ে নাও।") + "</p>";
   return {
     title: L("Settings", "সেটিংস"), html, nav: false,
     after: () => document.querySelectorAll("[data-ch]").forEach(el => el.addEventListener("change", () => { S.settings[el.dataset.ch] = el.dataset.ch === "goal" ? Number(el.value) : el.value; save(); toast(L("Saved", "সংরক্ষিত")); }))
@@ -788,14 +791,27 @@ VIEWS.settings = function () {
 };
 ACT.setS = d => { S.settings[d.k] = d.val; save(); render(); };
 ACT.editProfile = () => { draft = Object.assign({}, S.profile); go("onboard", { step: 1 }); };
-ACT.saveKey = () => { S.settings.apiKey = $("#sKey").value.trim(); S.settings.model = ""; save(); toast(L("Key saved", "কী সংরক্ষিত")); };
+ACT.saveKey = () => {
+  const g = $("#sGroq").value.trim(), k = $("#sKey").value.trim();
+  if (g !== S.settings.groqKey) S.settings.groqModel = "";
+  if (k !== S.settings.apiKey) S.settings.model = "";
+  S.settings.groqKey = g; S.settings.apiKey = k; save(); toast(L("Keys saved", "কী সংরক্ষিত"));
+};
 ACT.testKey = async () => {
-  ACT.saveKey(); if (!apiKey()) return toast(L("Paste your key first", "আগে কী পেস্ট করো"));
+  ACT.saveKey(); if (!hasAI()) return toast(L("Paste a key first", "আগে একটি কী পেস্ট করো"));
   const m = $("#keyMsg"); m.innerHTML = '<span class="spin" style="width:14px;height:14px;border-width:2px;vertical-align:middle"></span> ' + L("Testing…", "পরীক্ষা হচ্ছে…");
-  try {
-    const t = await AI.generate({ key: apiKey(), model: S.settings.model, prompt: "Reply with just: OK", temperature: 0, onModel: x => { S.settings.model = x; save(); } });
-    m.textContent = "✓ " + L("AI is working", "AI কাজ করছে") + " (" + (S.settings.model || AI.DEFAULT_MODEL) + ") — " + t.trim().slice(0, 20);
-  } catch (e) { m.textContent = "✗ " + aiErr(e); }
+  const one = async (name, opts) => {
+    const t0 = Date.now();
+    try {
+      await AI.generate(Object.assign({ prompt: "Reply with just: OK", temperature: 0, timeout: 20000, onModel: saveModel }, opts));
+      const model = name === "Groq" ? S.settings.groqModel : S.settings.model;
+      return "✓ " + name + ": " + L("working", "কাজ করছে") + " (" + ((Date.now() - t0) / 1000).toFixed(1) + "s" + (model ? ", " + model : "") + ")";
+    } catch (e) { return "✗ " + name + ": " + aiErr(e); }
+  };
+  const lines = [];
+  if (groqKey()) lines.push(await one("Groq", { groqKey: groqKey(), groqModel: S.settings.groqModel }));
+  if (apiKey()) lines.push(await one("Gemini", { key: apiKey(), model: S.settings.model }));
+  m.textContent = lines.join("\n");
 };
 ACT.clearAI = () => ask(L("Delete saved AI questions?", "সংরক্ষিত AI প্রশ্ন মুছবে?"), L("Built-in questions and your scores stay.", "বিল্ট-ইন প্রশ্ন ও স্কোর থাকবে।"), L("Delete", "মুছো"), () => {
   const ids = new Set(S.ai.map(q => q.id)); S.ai = []; S.bm = S.bm.filter(i => !ids.has(i)); S.mis = S.mis.filter(i => !ids.has(i)); reindex(); save(); render();

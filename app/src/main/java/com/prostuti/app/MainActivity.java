@@ -39,7 +39,8 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
 
     private static final String START_URL = "file:///android_asset/index.html";
-    private static final String ALLOWED_API = "https://generativelanguage.googleapis.com/";
+    private static final String GEMINI_API = "https://generativelanguage.googleapis.com/";
+    private static final String GROQ_API = "https://api.groq.com/";
 
     private WebView web;
     private FrameLayout root;
@@ -176,13 +177,17 @@ public class MainActivity extends Activity {
                 String text;
                 HttpURLConnection c = null;
                 try {
-                    if (url == null || !url.startsWith(ALLOWED_API)) throw new SecurityException("blocked url");
+                    boolean groq = url != null && url.startsWith(GROQ_API);
+                    if (url == null || !(groq || url.startsWith(GEMINI_API))) throw new SecurityException("blocked url");
                     c = (HttpURLConnection) new URL(url).openConnection();
                     c.setRequestMethod("POST".equals(method) ? "POST" : "GET");
                     c.setConnectTimeout(20000);
                     c.setReadTimeout(80000);
                     c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                    if (key != null && !key.isEmpty()) c.setRequestProperty("x-goog-api-key", key);
+                    if (key != null && !key.isEmpty()) {
+                        if (groq) c.setRequestProperty("Authorization", "Bearer " + key);
+                        else c.setRequestProperty("x-goog-api-key", key);
+                    }
                     if ("POST".equals(method)) {
                         byte[] data = (body == null ? "" : body).getBytes(StandardCharsets.UTF_8);
                         c.setDoOutput(true);
