@@ -226,7 +226,7 @@ VIEWS.onboard = function (p) {
   const canNext = st === 0 ? true : st === 1 ? !!draft.exam : st === 2 ? !!(draft.exam === "ADM" ? draft.target : draft.group) : true;
   return {
     title: "", nav: false, top: false,
-    html: '<div style="padding-top:calc(env(safe-area-inset-top) + 18px)">' + steps + h +
+    html: '<div style="padding-top:calc(var(--sat) + 18px)">' + steps + h +
       '<div class="row" style="margin-top:24px">' + (st > 0 ? '<button class="btn line" data-a="obStep" data-d="-1">' + L("Back", "পেছনে") + "</button>" : "") +
       '<button class="btn grow" data-a="obStep" data-d="1" ' + (canNext ? "" : "disabled") + ">" + (st === 3 ? L("Start preparing", "প্রস্তুতি শুরু করো") : L("Continue", "পরবর্তী")) + "</button></div></div>"
   };
@@ -380,6 +380,7 @@ function aiErr(e) {
   const m = String(e && e.message || e);
   if (m === "NOKEY") return L("Add your free Gemini key in Settings.", "সেটিংসে তোমার ফ্রি Gemini কী দাও।");
   if (m === "BADKEY") return L("Your AI key is not valid. Check it in Settings.", "AI কী সঠিক নয়। সেটিংসে দেখো।");
+  if (m === "BUSY") return L("Google's free AI is very busy right now (all free models tried). Please try again in a minute.", "Google-এর ফ্রি AI এখন খুব ব্যস্ত (সব ফ্রি মডেল চেষ্টা করা হয়েছে)। এক মিনিট পর আবার চেষ্টা করো।");
   if (m === "RATE") return L("Free AI limit reached for now. Try again in a minute (or tomorrow).", "এখনকার ফ্রি সীমা শেষ। এক মিনিট পর (বা কাল) আবার চেষ্টা করো।");
   if ((m === "NETWORK" || /fetch|network/i.test(m)) && !AI.isNative() && navigator.onLine) return L("AI can't connect from this web preview — it works in the Android app.", "এই ওয়েব প্রিভিউ থেকে AI সংযোগ হয় না — অ্যান্ড্রয়েড অ্যাপে কাজ করবে।");
   if (m === "NETWORK" || /fetch|network|timeout/i.test(m)) return L("No internet connection. Built-in questions still work offline.", "ইন্টারনেট সংযোগ নেই। বিল্ট-ইন প্রশ্ন অফলাইনে চলবে।");
@@ -804,6 +805,7 @@ ACT.resetAll = () => ask(L("Reset everything?", "সব রিসেট কর�
 }, true);
 
 /* ---------------- boot ---------------- */
+if (window.AndroidBridge) document.documentElement.classList.add("native");
 document.addEventListener("keydown", e => { if (e.key === "Escape" && modalOpen) closeModal(); if (e.key === "Enter" && !e.shiftKey && e.target.id === "chatIn") { e.preventDefault(); ACT.chatSend(); } });
 document.addEventListener("click", e => { // open web links outside the app
   const a = e.target.closest("a[href^='http']"); if (!a) return;

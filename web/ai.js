@@ -46,30 +46,29 @@ window.AI = (function () {
     catch (e) { return "HTTP " + res.status; }
   }
 
-  // Pick a working Flash model from the account's model list (model names change often).
-  async function discoverModel(key) {
+  // All usable Flash models for this key, best first (model names change often, so we ask Google).
+  let modelCache = null;
+  async function listModels(key) {
+    if (modelCache) return modelCache;
     const res = await http("GET", BASE + "/models?pageSize=200", key);
     if (res.status !== 200) throw new Error(errMsg(res));
     const all = (JSON.parse(res.text).models || []).filter(function (m) {
       const n = m.name || "";
       return (m.supportedGenerationMethods || []).indexOf("generateContent") >= 0 &&
-        /flash/.test(n) && !/(image|tts|live|audio|embed|vision|transcribe|translate)/.test(n);
+        /(flash|gemma)/.test(n) && !/(image|tts|live|audio|embed|vision|transcribe|translate|native)/.test(n);
     });
-    let list = all.filter(function (m) { return !/(preview|exp)/.test(m.name); });
-    if (!list.length) list = all;
-    if (!list.length) throw new Error("No Flash model available for this key");
-    const ver = function (n) { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
-    list.sort(function (a, b) {
-      const la = /lite/.test(a.name) ? 1 : 0, lb = /lite/.test(b.name) ? 1 : 0;
-      return (ver(b.name) - ver(a.name)) || (la - lb);
-    });
-    return list[0].name.replace(/^models\//, "");
+    const ver = function (n) { const m = n.match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
+    const rank = function (n) { return (/gemma/.test(n) ? 4 : 0) + (/(preview|exp)/.test(n) ? 2 : 0) + (/lite/.test(n) ? 1 : 0); };
+    all.sort(function (a, b) { return (rank(a.name) - rank(b.name)) || (ver(b.name) - ver(a.name)); });
+    modelCache = all.map(function (m) { return m.name.replace(/^models\//, ""); });
+    return modelCache;
   }
+  async function discoverModel(key) { const l = await listModels(key); if (!l.length) throw new Error("No model available"); return l[0]; }
+  const sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
   async function generate(opts) {
     // opts: {key, model, system, prompt, history:[{role,text}], json:bool, schema, temperature, onModel}
     if (!opts.key) throw new Error("NOKEY");
-    let model = opts.model || DEFAULT_MODEL;
     const contents = (opts.history || []).map(function (h) { return { role: h.role === "user" ? "user" : "model", parts: [{ text: h.text }] }; });
     contents.push({ role: "user", parts: [{ text: opts.prompt }] });
     const body = { contents: contents, generationConfig: { temperature: opts.temperature == null ? 0.7 : opts.temperature } };
@@ -78,19 +77,49 @@ window.AI = (function () {
       body.generationConfig.responseMimeType = "application/json";
       if (opts.schema) body.generationConfig.responseSchema = opts.schema;
     }
-    const send = function (m) { return http("POST", BASE + "/models/" + encodeURIComponent(m) + ":generateContent", opts.key, JSON.stringify(body)); };
-    let res = await send(model);
-    if (res.status === 404 || (res.status === 400 && /model/i.test(res.text) && !/API key/i.test(res.text))) {
-      model = await discoverModel(opts.key);
-      if (opts.onModel) opts.onModel(model);
-      res = await send(model);
+    const send = function (m) {
+      let b = body;
+      if (/gemma/.test(m)) { // Gemma models: no system field / JSON mode, so fold them into the prompt
+        const c = JSON.parse(JSON.stringify(contents));
+        const last = c[c.length - 1].parts[0];
+        last.text = (opts.system ? opts.system + "\n\n" : "") + last.text + (opts.json ? "\n\nReply with ONLY valid JSON, no other text." : "");
+        b = { contents: c, generationConfig: { temperature: body.generationConfig.temperature } };
+      }
+      return http("POST", BASE + "/models/" + encodeURIComponent(m) + ":generateContent", opts.key, JSON.stringify(b));
+    };
+    const isBusy = function (r) { return r.status === 503 || r.status === 500 || r.status === 502 || r.status === 504 || (r.status === 0 && r.text === "timeout"); };
+    const isModelErr = function (r) { return r.status === 404 || (r.status === 400 && /model/i.test(r.text) && !/API key/i.test(r.text)); };
+
+    const queue = [opts.model || DEFAULT_MODEL];
+    const tried = {};
+    let listed = false, res = null, used = null, sawRate = false, sawBusy = false;
+    for (let step = 0; step < 8; step++) {
+      let m = null;
+      for (let i = 0; i < queue.length; i++) if (!tried[queue[i]]) { m = queue[i]; break; }
+      if (!m) {
+        if (listed) break;
+        listed = true;
+        try { (await listModels(opts.key)).forEach(function (x) { if (queue.indexOf(x) < 0) queue.push(x); }); } catch (e) { break; }
+        continue;
+      }
+      tried[m] = true;
+      res = await send(m);
+      if (isBusy(res)) { await sleep(1200); res = await send(m); }
+      if (res.status === 200) { used = m; break; }
+      if (res.status === 0 && res.text !== "timeout") throw new Error("NETWORK");
+      if (/API key not valid|API_KEY_INVALID|API key expired/i.test(res.text) || res.status === 401) throw new Error("BADKEY");
+      if (res.status === 429) { sawRate = true; continue; }
+      if (isBusy(res)) { sawBusy = true; continue; }
+      if (isModelErr(res) || res.status === 403) continue;
+      throw new Error(errMsg(res)); // a real bad request: don't hammer other models
     }
-    if (res.status !== 200) {
-      const m = errMsg(res);
-      if (res.status === 429) throw new Error("RATE");
-      if (/API key not valid|API_KEY_INVALID|PERMISSION_DENIED/i.test(res.text)) throw new Error("BADKEY");
-      throw new Error(m);
+    if (!used) {
+      if (sawBusy) throw new Error("BUSY");
+      if (sawRate) throw new Error("RATE");
+      if (res && /PERMISSION_DENIED/i.test(res.text)) throw new Error("BADKEY");
+      throw new Error(res ? errMsg(res) : "No model available");
     }
+    if (used !== opts.model && opts.onModel) opts.onModel(used);
     const j = JSON.parse(res.text);
     const cand = j.candidates && j.candidates[0];
     const parts = (cand && cand.content && cand.content.parts) || [];
