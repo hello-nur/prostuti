@@ -42,8 +42,25 @@ const letter = (i, q) => {
   const b = !q ? bn() : q.src === "bank" ? q.s === "ban" : contentLang(q.s) === "bn";
   return b ? LET_BN[i] : LET_EN[i];
 };
+function delatex(t) { // AI sometimes writes LaTeX; show it as plain Unicode math
+  const sup = { "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "-": "⁻", "+": "⁺", "n": "ⁿ" };
+  const sub = { "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉" };
+  let s = String(t == null ? "" : t);
+  s = s.replace(/\^\s*\{?\\circ\}?/g, "°");
+  s = s.replace(/\^\{([0-9n+-]+)\}|\^([0-9n])/g, (m, a, b) => (a || b).split("").map(c => sup[c] || c).join(""));
+  s = s.replace(/_\{([0-9]+)\}|_([0-9])/g, (m, a, b) => (a || b).split("").map(c => sub[c] || c).join(""));
+  const wrap = x => (/^[\w.²³⁻⁰¹⁴-⁹√]+$/.test(x) ? x : "(" + x + ")");
+  for (let i = 0; i < 4; i++) {
+    s = s.replace(/\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}/g, (m, p, q) => wrap(p) + "/" + wrap(q)).replace(/\\sqrt\{([^{}]*)\}/g, (m, p) => "√" + wrap(p));
+    s = s.replace(/\\(?:text|mathrm|mathbf|operatorname|boxed)\{([^{}]*)\}/g, "$1").replace(/\\vec\{([^{}]*)\}/g, "$1⃗").replace(/\\hat\{([^{}]*)\}/g, "$1̂");
+  }
+  const sym = { times: "×", cdot: "·", div: "÷", pm: "±", le: "≤", leq: "≤", ge: "≥", geq: "≥", ne: "≠", neq: "≠", approx: "≈", infty: "∞", pi: "π", theta: "θ", alpha: "α", beta: "β", gamma: "γ", Delta: "Δ", delta: "δ", lambda: "λ", mu: "μ", omega: "ω", Omega: "Ω", rho: "ρ", sigma: "σ", phi: "φ", circ: "°", degree: "°", rightarrow: "→", to: "→", Rightarrow: "⇒", leftarrow: "←", sum: "Σ", int: "∫", partial: "∂", sqrt: "√" };
+  s = s.replace(/\\([A-Za-z]+)/g, (m, w) => (sym[w] != null ? sym[w] : (/^(left|right|quad|qquad|displaystyle|,|;|!)$/.test(w) ? " " : m)));
+  s = s.replace(/\\[\[\]()]/g, "").replace(/\$\$?/g, "").replace(/\\[,;! ]/g, " ").replace(/[{}]/g, "");
+  return s;
+}
 function md(t) { // tiny, safe markdown for AI text
-  return esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/^#{1,4}\s*(.+)$/gm, "<b>$1</b>").replace(/^\s*[\*\-]\s+/gm, "• ");
+  return esc(delatex(t)).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/^#{1,4}\s*(.+)$/gm, "<b>$1</b>").replace(/^\s*[\*\-]\s+/gm, "• ");
 }
 
 /* ---------------- question pool ---------------- */
@@ -405,16 +422,27 @@ async function aiGenerate(s, c, n, diff) {
   if (needKey()) return;
   busy(L("Making " + n + " new questions…", N(n) + "টি নতুন প্রশ্ন তৈরি হচ্ছে…"));
   const dmap = { easy: "easy, knowledge-level", medium: "board-exam standard (mix of knowledge, comprehension and application)", hard: "hard, admission-test standard with tricky distractors" };
+  const valid = x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3;
+  const ask = (k, avoid) => AI.generate({
+    ...aiKeys(), system: sysPrompt(s), json: true, schema: AI.MCQ_SCHEMA, temperature: 0.9, timeout: 60000,
+    prompt: "Create exactly " + k + " different " + dmap[diff] + " multiple-choice questions (the list must contain " + k + " items) for the subject '" + SUB[s].en + "', chapter '" + SUB[s].ch[c] + "'. " +
+      "Cover different topics of the chapter; avoid trivial or repeated questions. Each item: q (question), options (exactly 4 short options, no letter prefixes), answer (0-based index of the single correct option), explanation (1–3 sentences why it is correct). Vary the position of the correct answer." +
+      (avoid.length ? " Do NOT repeat these questions: " + avoid.slice(0, 15).map(x => "“" + String(x.q).slice(0, 80) + "”").join("; ") : "")
+  }).then(out => (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])).filter(valid));
   try {
-    const out = await AI.generate({
-      ...aiKeys(), system: sysPrompt(s), json: true, schema: AI.MCQ_SCHEMA, temperature: 0.9, timeout: 60000,
-      prompt: "Create " + n + " different " + dmap[diff] + " multiple-choice questions for the subject '" + SUB[s].en + "', chapter '" + SUB[s].ch[c] + "'. " +
-        "Cover different topics of the chapter; avoid trivial or repeated questions. Each item: q (question), options (exactly 4 short options, no letter prefixes), answer (0-based index of the single correct option), explanation (1–3 sentences why it is correct). Vary the position of the correct answer."
-    });
-    const arr = (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])).filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3);
+    let arr = [], lastErr = null;
+    for (let round = 0; round < 3 && arr.length < n; round++) {
+      const need = n - arr.length, sizes = [];
+      for (let left = need; left > 0; left -= 10) sizes.push(Math.min(10, left));
+      const got = await Promise.all(sizes.map(k => ask(k, arr).catch(e => { lastErr = e; return []; })));
+      const seen = new Set(arr.map(x => String(x.q).trim()));
+      [].concat(...got).forEach(x => { const key = String(x.q).trim(); if (!seen.has(key) && arr.length < n) { seen.add(key); arr.push(x); } });
+      if (lastErr && !arr.length) throw lastErr;
+      if (lastErr) break;
+    }
     if (!arr.length) throw new Error("AI returned no usable questions");
     const stamp = Date.now().toString(36);
-    const qs = arr.map((x, i) => ({ id: "a" + stamp + i, s, c, q: String(x.q), o: x.options.map(String), a: Number(x.answer), e: String(x.explanation || ""), src: "ai", d: diff }));
+    let qs = arr.map((x, i) => ({ id: "a" + stamp + i, s, c, q: delatex(x.q), o: x.options.map(o => delatex(o)), a: Number(x.answer), e: delatex(x.explanation || ""), src: "ai", d: diff }));
     S.ai = qs.concat(S.ai).slice(0, 3000); reindex(); save();
     closeModal();
     startQuiz({ mode: "practice", title: "✨ " + SUB[s].ch[c], qs });
@@ -668,7 +696,7 @@ ACT.mockStart = async () => {
     const qs = out.filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3).map((x, i) => {
       const s = byName[String(x.subject || "").toLowerCase()] || m.subs[i % m.subs.length];
       const c = Math.max(0, Math.min(SUB[s].ch.length - 1, Number(x.chapter) || 0));
-      return { id: "a" + stamp + "m" + i, s, c, q: String(x.q), o: x.options.map(String), a: Number(x.answer), e: String(x.explanation || ""), src: "ai" };
+      return { id: "a" + stamp + "m" + i, s, c, q: delatex(x.q), o: x.options.map(o => delatex(o)), a: Number(x.answer), e: delatex(x.explanation || ""), src: "ai" };
     });
     if (qs.length && qs.length < n) toast(L("Got " + qs.length + " of " + n + " questions (free AI limit) — starting with those.", N(n) + "টির মধ্যে " + N(qs.length) + "টি প্রশ্ন পাওয়া গেছে (ফ্রি সীমা) — এগুলো দিয়ে শুরু হচ্ছে।"));
     if (!qs.length) throw new Error("AI returned no usable questions");

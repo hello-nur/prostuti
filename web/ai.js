@@ -164,7 +164,7 @@ window.AI = (function () {
     (opts.history || []).forEach(function (h) { msgs.push({ role: h.role === "user" ? "user" : "assistant", content: h.text }); });
     msgs.push({ role: "user", content: opts.prompt });
     const list = await groqModels(opts.groqKey);
-    const order = opts.groqModel ? [opts.groqModel].concat(list.filter(function (m) { return m !== opts.groqModel; })) : list;
+    const order = list;
     let res = null, quota = 0, busy = 0, bad = 0;
     for (let i = 0; i < order.length && i < 4 && Date.now() < deadline; i++) {
       const m = order[i];
@@ -183,7 +183,7 @@ window.AI = (function () {
         const text = ((ch && ch.message && ch.message.content) || "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
         if (!text || (ch && ch.finish_reason === "length")) { busy++; continue; }   // empty or cut off: try next model
         if (opts.json) { try { parseJSON(text); } catch (e) { bad++; continue; } } // unreadable JSON: try next model
-        if (m !== opts.groqModel && opts.onModel) opts.onModel("groq", m);
+        if (opts.onModel) opts.onModel("groq", m);
         return text;
       }
       if (res.status === 0 && res.text !== "timeout") throw new Error("NETWORK");
@@ -210,7 +210,7 @@ window.AI = (function () {
     const ready = providers.filter(function (p) { return !(cooldown[p] > now); });
     const order = ready.length ? ready.concat(providers.filter(function (p) { return ready.indexOf(p) < 0; })) : providers;
     const tmo = opts.timeout || 25000;
-    const deadline = Date.now() + Math.max(55000, tmo * 2);
+    const deadline = Date.now() + Math.max(30000, tmo * 2);
     const errors = [];
     for (let i = 0; i < order.length; i++) {
       const p = order[i];
