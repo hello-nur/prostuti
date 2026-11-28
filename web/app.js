@@ -60,6 +60,7 @@ function delatex(t) { // AI sometimes writes LaTeX; show it as plain Unicode mat
     s = s.replace(/\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}/g, (m, p, q) => wrap(p) + "/" + wrap(q)).replace(/\\sqrt\{([^{}]*)\}/g, (m, p) => "√" + wrap(p));
     s = s.replace(/\\(?:text|mathrm|mathbf|operatorname|boxed)\{([^{}]*)\}/g, "$1").replace(/\\vec\{([^{}]*)\}/g, "$1⃗").replace(/\\hat\{([^{}]*)\}/g, "$1̂");
   }
+  s = s.replace(/\\vec\s*([A-Za-z])/g, "$1⃗").replace(/\\hat\s*([A-Za-z])/g, "$1̂").replace(/\\(?:overrightarrow|vec)\{?([A-Za-z]+)\}?/g, "$1⃗");
   const sym = { times: "×", cdot: "·", div: "÷", pm: "±", le: "≤", leq: "≤", ge: "≥", geq: "≥", ne: "≠", neq: "≠", approx: "≈", infty: "∞", pi: "π", theta: "θ", alpha: "α", beta: "β", gamma: "γ", Delta: "Δ", delta: "δ", lambda: "λ", mu: "μ", omega: "ω", Omega: "Ω", rho: "ρ", sigma: "σ", phi: "φ", circ: "°", degree: "°", rightarrow: "→", to: "→", Rightarrow: "⇒", leftarrow: "←", sum: "Σ", int: "∫", partial: "∂", sqrt: "√" };
   s = s.replace(/\\([A-Za-z]+)/g, (m, w) => (sym[w] != null ? sym[w] : (/^(left|right|quad|qquad|displaystyle|,|;|!)$/.test(w) ? " " : m)));
   s = s.replace(/\\[\[\]()]/g, "").replace(/\$\$?/g, "").replace(/\\[,;! ]/g, " ").replace(/[{}]/g, "");
