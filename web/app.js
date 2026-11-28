@@ -447,13 +447,15 @@ function sysPrompt(sid) {
     "Write everything in " + (lang === "bn" ? "Bangla (standard Bangla script, NCTB Bangla-version terminology)" : "English (NCTB English-version terminology)") + ". " +
     "Use Unicode symbols for math and chemistry (x², √, π, H₂O, →), never LaTeX. Double-check every fact and calculation before answering.";
 }
+const mcqList = out => (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || []));
+const mcqOK = out => mcqList(out).some(x => x && x.q && Array.isArray(x.options) && x.options.length === 4);
 async function aiGenerate(s, c, n, diff) {
   if (needKey()) return;
   busy(L("Making " + n + " new questions…", N(n) + "টি নতুন প্রশ্ন তৈরি হচ্ছে…"));
   const dmap = { easy: "easy, knowledge-level", medium: "board-exam standard (mix of knowledge, comprehension and application)", hard: "hard, admission-test standard with tricky distractors" };
   const valid = x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3;
   const ask = (k, avoid) => AI.generate({
-    ...aiKeys(), system: sysPrompt(s), json: true, schema: AI.MCQ_SCHEMA, temperature: 0.9, timeout: 60000,
+    ...aiKeys(), system: sysPrompt(s), json: true, schema: AI.MCQ_SCHEMA, temperature: 0.9, timeout: 60000, validate: mcqOK,
     prompt: "Create exactly " + k + " different " + dmap[diff] + " multiple-choice questions (the list must contain " + k + " items) for the subject '" + SUB[s].en + "', chapter '" + SUB[s].ch[c] + "'. " +
       "Cover different topics of the chapter; avoid trivial or repeated questions. Each item: q (question), options (exactly 4 short options, no letter prefixes), answer (0-based index of the single correct option), explanation (1–3 sentences why it is correct). Vary the position of the correct answer." +
       (avoid.length ? " Do NOT repeat these questions: " + avoid.slice(0, 15).map(x => "“" + String(x.q).slice(0, 80) + "”").join("; ") : "")
@@ -728,7 +730,7 @@ async function aiMany(subsAll, need, neg, onProgress) {
     const subsK = subsAll.length <= 2 ? subsAll : subsAll.filter((_, i) => i % Math.min(sizes.length, subsAll.length) === k % Math.min(sizes.length, subsAll.length));
     const subs = subsK.map(s => SUB[s].en + " (chapters: " + SUB[s].ch.join("; ") + ")").join("\n");
     return AI.generate({
-      ...aiKeys(), groqStart: k + attempt, system: sysPrompt(subsK.length === 1 ? subsK[0] : "mix"), json: true, temperature: 0.9, timeout: 60000, schema,
+      ...aiKeys(), groqStart: k + attempt, system: sysPrompt(subsK.length === 1 ? subsK[0] : "mix"), json: true, temperature: 0.9, timeout: 60000, schema, validate: mcqOK,
       prompt: "Create exactly " + size + " different MCQs (the list must contain " + size + " items) for a model test paper" + (neg ? " in university admission style" : " in Bangladesh board exam style") + ", spread across these subjects and their chapters:\n" + subs +
         "\nFor each item return: subject (exactly the English subject name given above), chapter (0-based index in that subject's chapter list), q, options (exactly 4), answer (0-based correct index), explanation (1–2 sentences). Mix easy, medium and hard; vary the correct answer position."
     }).then(out => (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])));
@@ -795,18 +797,37 @@ VIEWS.cq = function (p) {
   }
   return { title: L("Creative Question", "সৃজনশীল প্রশ্ন"), html, nav: false, after };
 };
+// AI models name the creative-question fields in different ways; bring them to {stem, parts:[{label,question,marks,answer}]}
+function normCQ(d) {
+  if (!d || typeof d !== "object") return null;
+  if (Array.isArray(d)) d = { parts: d };
+  const pick = (o, keys) => { for (const k of Object.keys(o)) if (keys.test(k)) return o[k]; return undefined; };
+  let stem = pick(d, /^(stem|stimulus|uddipok|uddipak|scenario|passage|context|উদ্দীপক)$/i);
+  let parts = pick(d, /^(parts|questions|items|subquestions|sub_questions|প্রশ্ন|প্রশ্নসমূহ)$/i);
+  if (!parts) { const arr = Object.values(d).find(Array.isArray); if (arr) parts = arr; }
+  if (stem && typeof stem === "object") stem = stem.text || stem.content || JSON.stringify(stem);
+  parts = (parts || []).map((x, i) => {
+    if (typeof x !== "object" || !x) return null;
+    const q = pick(x, /^(question|q|prompt|text|প্রশ্ন)$/i), ans = pick(x, /^(answer|model_answer|modelAnswer|solution|ans|উত্তর)$/i);
+    const marks = Number(pick(x, /^(marks|mark|score|নম্বর)$/i)) || [1, 2, 3, 4][i] || 1;
+    const label = pick(x, /^(label|part|id|no)$/i) || ["ক", "খ", "গ", "ঘ"][i] || String(i + 1);
+    return q ? { label: String(label).replace(/[).]$/, ""), question: String(q), marks, answer: String(ans || "") } : null;
+  }).filter(Boolean);
+  return stem && parts.length >= 3 ? { stem: String(stem), parts } : null;
+}
 async function loadCQ(p) {
   if (needKey()) { stack.pop(); render(); return; }
   p.loading = true; render();
   const lang = contentLang(p.s);
   try {
     const d = await AI.generate({
-      ...aiKeys(), system: sysPrompt(p.s), json: true, schema: AI.CQ_SCHEMA, temperature: 0.9, timeout: 60000,
+      ...aiKeys(), system: sysPrompt(p.s), json: true, schema: AI.CQ_SCHEMA, temperature: 0.9, timeout: 60000, validate: normCQ,
       prompt: "Create one Bangladesh board-standard creative question (srijonshil prosno) for '" + SUB[p.s].en + "', chapter '" + SUB[p.s].ch[p.c] + "'. " +
         "stem: a realistic stimulus of 3–6 sentences (may include data, an experiment, a situation or a described figure). parts: exactly 4 items with labels " + (lang === "bn" ? "ক, খ, গ, ঘ" : "a, b, c, d") +
         " — knowledge (1 mark), comprehension (2 marks), application (3 marks), higher-order ability (4 marks). answer: a full model answer as an examiner expects for those marks, with steps for calculations."
     });
-    p.data = d; p.loading = false;
+    p.data = normCQ(d); p.loading = false;
+    if (!p.data) throw new Error("BUSY");
   } catch (e) { p.loading = false; p.err = aiErr(e); }
   const cur = stack[stack.length - 1]; if (cur && cur.p === p) render();
 }

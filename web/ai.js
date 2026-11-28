@@ -183,7 +183,11 @@ window.AI = (function () {
         const ch = j.choices && j.choices[0];
         const text = ((ch && ch.message && ch.message.content) || "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
         if (!text || (ch && ch.finish_reason === "length")) { busy++; continue; }   // empty or cut off: try next model
-        if (opts.json) { try { parseJSON(text); } catch (e) { bad++; continue; } } // unreadable JSON: try next model
+        if (opts.json) { // unreadable or incomplete JSON: try next model
+          let okj = false;
+          try { const o = parseJSON(text); okj = !opts.validate || !!opts.validate(o); } catch (e) {}
+          if (!okj) { bad++; continue; }
+        }
         if (opts.onModel) opts.onModel("groq", m);
         return text;
       }
@@ -218,7 +222,11 @@ window.AI = (function () {
       if (i > 0 && Date.now() > deadline - 8000) break;
       try {
         const text = p === "groq" ? await groq(opts, tmo, deadline) : await gemini(opts, tmo, deadline);
-        if (opts.json) return parseJSON(text);
+        if (opts.json) {
+          const o = parseJSON(text);
+          if (opts.validate && !opts.validate(o)) throw new Error("BUSY");
+          return o;
+        }
         return text;
       } catch (e) {
         const m = String(e && e.message || e);
