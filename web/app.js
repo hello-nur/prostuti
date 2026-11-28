@@ -11,7 +11,8 @@ function defaults() {
     profile: null,
     settings: { lang: "en", theme: "system", apiKey: "", model: "", goal: 30, examDate: "" },
     stats: { ans: {}, days: {}, history: [] },
-    bm: [], mis: [], ai: [], chat: [], chats: [], chatId: null
+    bm: [], mis: [], ai: [], chat: [], chats: [], chatId: null,
+    admin: { on: false, real: null, hash: "" }
   };
 }
 function load() {
@@ -20,6 +21,7 @@ function load() {
     const j = JSON.parse(localStorage.getItem(KEY) || "null");
     if (j) { d = Object.assign(d, j); d.settings = Object.assign(defaults().settings, j.settings || {}); d.stats = Object.assign(defaults().stats, j.stats || {}); }
     if (!Array.isArray(d.chats)) d.chats = [];
+    d.admin = Object.assign({ on: false, real: null, hash: "" }, d.admin || {});
     if (d.chat && d.chat.length && !d.chats.length) { // move the old single chat into a session
       const first = d.chat.find(m => m.role === "user");
       d.chats = [{ id: "c0", title: first ? String(first.text).slice(0, 40) : "Chat", sub: "", topic: "", msgs: d.chat, t: Date.now() }];
@@ -302,6 +304,7 @@ VIEWS.home = function () {
     (days == null ? '<div style="font-size:22px;font-weight:700;margin:6px 0">' + L("Set your exam date", "পরীক্ষার তারিখ দাও") + '</div><button class="btn ghost" style="min-height:40px" data-a="go" data-v="settings">' + L("Set date", "তারিখ ঠিক করো") + "</button>"
       : days > 0 ? '<div class="row" style="align-items:flex-end;gap:8px;margin-top:6px"><span class="big">' + N(days) + '</span><span style="padding-bottom:6px">' + L("days left", "দিন বাকি") + '</span></div><div class="k" style="margin-top:4px">' + L("Exam starts", "পরীক্ষা শুরু") + " " + esc(new Date(ed + "T10:00:00").toLocaleDateString(bn() ? "bn-BD" : "en-GB", { day: "numeric", month: "long", year: "numeric" })) + "</div>"
       : '<div style="font-size:22px;font-weight:700;margin:6px 0">' + L("Exam time — you've got this!", "পরীক্ষা চলছে — তুমি পারবে!") + "</div>") + "</div>" +
+    (isAdmin() ? '<button class="card row" style="width:100%;border:2px dashed var(--amber);text-align:start" data-a="go" data-v="admin"><span class="pill a">ADMIN</span><span class="grow small">' + L("Viewing as ", "দেখছ: ") + "<b>" + esc(examLabel()) + '</b></span><span class="small" style="color:var(--pri);font-weight:600">' + L("Switch ›", "বদলাও ›") + "</span></button>" : "") +
     '<div class="card row"><svg class="ring" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="' + ringR + '" fill="none" stroke="var(--line)" stroke-width="7"/><circle cx="32" cy="32" r="' + ringR + '" fill="none" stroke="var(--pri)" stroke-width="7" stroke-linecap="round" stroke-dasharray="' + ringC + '" stroke-dashoffset="' + ringC * (1 - ringP) + '" transform="rotate(-90 32 32)"/><text x="32" y="37" text-anchor="middle" font-size="15" font-weight="700" fill="currentColor">' + N(Math.round(ringP * 100)) + '%</text></svg>' +
     '<div class="grow"><b>' + esc(hello) + (p.name ? ", " + esc(p.name) : "") + '!</b><div class="small mute">' + L("Today", "আজ") + " " + N(done) + "/" + N(goal) + " " + L("questions", "প্রশ্ন") + " · 🔥 " + N(streak()) + " " + L("day streak", "দিনের ধারাবাহিকতা") + "</div></div></div>" +
     '<div class="grid2">' +
@@ -1017,6 +1020,71 @@ VIEWS.progress = function () {
 };
 ACT.histOpen = d => go("result", { res: S.stats.history[Number(d.i)] });
 
+/* ---------- Admin (local to this phone until the online database is ready) ---------- */
+const ADMIN_HASH = "216e64f637484c26738c4aee350e43b1407fbf7def6f253a15baad786703d0b4"; // SHA-256 of salt + password (the password itself is not in the code)
+function sha256hex(str) { // small pure-JS SHA-256 (works everywhere, no secure-context needed)
+  const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  const bytes = new TextEncoder().encode(str), l = bytes.length, n = ((l + 9 + 63) >> 6) << 6, m = new Uint8Array(n);
+  m.set(bytes); m[l] = 0x80; const bits = l * 8; m[n - 4] = bits >>> 24; m[n - 3] = (bits >>> 16) & 255; m[n - 2] = (bits >>> 8) & 255; m[n - 1] = bits & 255;
+  let h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]; const w = new Array(64);
+  const r = (x, k) => (x >>> k) | (x << (32 - k));
+  for (let o = 0; o < n; o += 64) {
+    for (let i = 0; i < 16; i++) w[i] = (m[o + 4 * i] << 24) | (m[o + 4 * i + 1] << 16) | (m[o + 4 * i + 2] << 8) | m[o + 4 * i + 3];
+    for (let i = 16; i < 64; i++) { const s0 = r(w[i - 15], 7) ^ r(w[i - 15], 18) ^ (w[i - 15] >>> 3), s1 = r(w[i - 2], 17) ^ r(w[i - 2], 19) ^ (w[i - 2] >>> 10); w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0; }
+    let [a, b, c, d, e, f, g, hh] = h;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (hh + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0, t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      hh = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    h = [h[0] + a, h[1] + b, h[2] + c, h[3] + d, h[4] + e, h[5] + f, h[6] + g, h[7] + hh].map(x => x | 0);
+  }
+  return h.map(x => (x >>> 0).toString(16).padStart(8, "0")).join("");
+}
+const adminHashOf = pw => sha256hex("prostuti-admin-v1:" + pw);
+const isAdmin = () => !!(S.admin && S.admin.on);
+const SECTORS = () => [].concat(
+  ...["SSC", "HSC"].map(ex => Object.keys(C.GROUPS).map(g => ({ exam: ex, group: g, target: "", label: (bn() ? C.EXAMS[ex].bn : C.EXAMS[ex].en) + " · " + (bn() ? C.GROUPS[g].bn : C.GROUPS[g].en) }))),
+  Object.entries(C.EXAMS.ADM.targets).map(([k, t]) => ({ exam: "ADM", group: "", target: k, label: (bn() ? t.bn : t.en) })));
+VIEWS.admin = function () {
+  if (!isAdmin()) {
+    return {
+      title: "🔐 " + L("Admin login", "অ্যাডমিন লগইন"), nav: false,
+      html: '<div class="card"><p class="small mute" style="margin:0 0 10px">' + L("For the app owner only. Lets you switch between SSC, HSC and every admission unit to check content.", "শুধু অ্যাপের মালিকের জন্য। SSC, HSC ও সব ভর্তি ইউনিট বদলে কনটেন্ট দেখা যায়।") + "</p>" +
+        '<label class="f" for="adPw" style="margin-top:0">' + L("Admin password", "অ্যাডমিন পাসওয়ার্ড") + '</label><input class="in" id="adPw" type="password" autocomplete="current-password">' +
+        '<button class="btn block" style="margin-top:12px" data-a="adminLogin">' + L("Log in", "লগইন") + "</button></div>"
+    };
+  }
+  const p = P(), cur = SECTORS().find(x => x.exam === p.exam && (x.exam === "ADM" ? x.target === p.target : x.group === p.group));
+  const counts = id => { let b = 0, a = 0; BANK.forEach(q => { if (q.s === id) b++; }); S.ai.forEach(q => { if (q.s === id) a++; }); return [b, a]; };
+  const html =
+    '<div class="card"><div class="small mute">' + L("Now viewing as", "এখন দেখছ") + '</div><b style="font-size:20px">' + esc(cur ? cur.label : examLabel()) + "</b>" +
+    (S.admin.real ? '<button class="btn line block" style="margin-top:10px" data-a="adminRestore">↩ ' + L("Back to my own profile", "নিজের প্রোফাইলে ফেরো") + "</button>" : "") + "</div>" +
+    '<div class="sec">' + L("Switch sector (one tap)", "সেক্টর বদলাও (এক চাপে)") + "</div>" +
+    ["SSC", "HSC", "ADM"].map(ex => '<div class="small mute" style="margin:10px 2px 6px">' + (bn() ? C.EXAMS[ex].bn : C.EXAMS[ex].en) + '</div><div class="chips">' +
+      SECTORS().map((x, i) => [x, i]).filter(([x]) => x.exam === ex).map(([x, i]) => '<button class="chip ' + (cur === x || (cur && cur.label === x.label) ? "on" : "") + '" data-a="adminSwitch" data-i="' + i + '">' + esc(ex === "ADM" ? x.label : (bn() ? C.GROUPS[x.group].bn : C.GROUPS[x.group].en)) + "</button>").join("") + "</div>").join("") +
+    '<div class="sec">' + L("Content report — current sector", "কনটেন্ট রিপোর্ট — বর্তমান সেক্টর") + '</div><div class="card"><table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr><th style="text-align:start;padding:6px 0">' + L("Subject", "বিষয়") + '</th><th style="text-align:end">' + L("Built-in", "বিল্ট-ইন") + '</th><th style="text-align:end">AI</th><th style="text-align:end">' + L("Chapters", "অধ্যায়") + "</th></tr></thead><tbody>" +
+    mySubs().map(id => { const [b, a] = counts(id); return '<tr style="border-top:1px solid var(--line)"><td style="padding:7px 0">' + esc(sn(id)) + '</td><td style="text-align:end">' + N(b) + '</td><td style="text-align:end">' + N(a) + '</td><td style="text-align:end">' + N(SUB[id].ch.length) + "</td></tr>"; }).join("") +
+    '</tbody></table><p class="tiny mute" style="margin:8px 0 0">' + L("Total in app: ", "অ্যাপে মোট: ") + N(BANK.length) + " " + L("built-in", "বিল্ট-ইন") + " + " + N(S.ai.length) + " AI</p></div>" +
+    '<div class="card"><h2>' + L("Change admin password (this phone)", "অ্যাডমিন পাসওয়ার্ড বদলাও (এই ফোনে)") + '</h2><input class="in" id="adNew" type="password" autocomplete="new-password" placeholder="' + L("New password (min 8 characters)", "নতুন পাসওয়ার্ড (কমপক্ষে ৮ অক্ষর)") + '"><button class="btn line block" style="margin-top:10px" data-a="adminChange">' + L("Save new password", "নতুন পাসওয়ার্ড সংরক্ষণ") + "</button></div>" +
+    '<button class="btn line block" style="color:var(--red)" data-a="adminLogout">' + L("Log out of admin", "অ্যাডমিন থেকে লগআউট") + "</button>";
+  return { title: "🔐 " + L("Admin", "অ্যাডমিন"), html, nav: false };
+};
+ACT.adminLogin = () => {
+  const pw = ($("#adPw").value || "");
+  const ok = adminHashOf(pw) === (S.admin.hash || ADMIN_HASH);
+  if (!ok) { $("#adPw").value = ""; return toast(L("Wrong password", "ভুল পাসওয়ার্ড")); }
+  S.admin.on = true; save(); render(); toast(L("Admin mode on", "অ্যাডমিন মোড চালু"));
+};
+ACT.adminSwitch = d => {
+  const x = SECTORS()[Number(d.i)]; if (!x) return;
+  if (!S.admin.real) S.admin.real = Object.assign({}, S.profile);
+  S.profile = Object.assign({}, S.profile, { exam: x.exam, group: x.group, target: x.target });
+  S.settings.examDate = ""; mockCfg = null; save(); render(); toast(L("Now viewing: ", "এখন দেখছ: ") + x.label);
+};
+ACT.adminRestore = () => { if (S.admin.real) { S.profile = S.admin.real; S.admin.real = null; S.settings.examDate = ""; mockCfg = null; save(); render(); toast(L("Back to your profile", "নিজের প্রোফাইলে ফিরেছ")); } };
+ACT.adminChange = () => { const v = $("#adNew").value || ""; if (v.length < 8) return toast(L("Use at least 8 characters", "কমপক্ষে ৮ অক্ষর দাও")); S.admin.hash = adminHashOf(v); save(); $("#adNew").value = ""; toast(L("Admin password changed on this phone", "এই ফোনে অ্যাডমিন পাসওয়ার্ড বদলানো হয়েছে")); };
+ACT.adminLogout = () => { ACT.adminRestore(); S.admin.on = false; save(); stack = [{ v: "home", p: {} }]; render(); toast(L("Logged out of admin", "অ্যাডমিন থেকে লগআউট")); };
+
 /* ---------- Settings ---------- */
 VIEWS.settings = function () {
   const st = S.settings, p = P();
@@ -1039,7 +1107,8 @@ VIEWS.settings = function () {
     '<div class="grid2" style="margin-bottom:8px"><button class="btn" data-a="backup">💾 ' + L("Backup to file", "ফাইলে ব্যাকআপ") + '</button><button class="btn ghost" data-a="restore">📂 ' + L("Restore backup", "ব্যাকআপ ফেরত") + "</button></div>" +
     '<p class="tiny mute" style="margin:0 0 12px">' + L("The backup file keeps your profile, progress, bookmarks, chats and AI keys — keep it private. Use it if you ever reinstall the app or change phones.", "ব্যাকআপ ফাইলে প্রোফাইল, অগ্রগতি, বুকমার্ক, চ্যাট ও AI কী থাকে — গোপন রাখো। অ্যাপ আবার ইনস্টল বা ফোন বদলালে এটি ব্যবহার করো।") + "</p>" +
     '<div class="grid2"><button class="btn line" data-a="clearAI" ' + (aiCount ? "" : "disabled") + ">" + L("Delete AI questions", "AI প্রশ্ন মুছো") + '</button><button class="btn line" style="color:var(--red)" data-a="resetAll">' + L("Reset everything", "সব রিসেট") + "</button></div></div>" +
-    '<p class="tiny mute" style="text-align:center">Prostuti v1.4 · ' + L("Built-in questions follow the NCTB syllabus; AI questions may occasionally contain mistakes — check with your textbook.", "বিল্ট-ইন প্রশ্ন NCTB সিলেবাস অনুযায়ী; AI প্রশ্নে মাঝে মাঝে ভুল থাকতে পারে — পাঠ্যবই মিলিয়ে নাও।") + "</p>";
+    '<button class="btn line block" style="margin-bottom:12px" data-a="go" data-v="admin">🔐 ' + (isAdmin() ? L("Admin panel", "অ্যাডমিন প্যানেল") : L("Admin login", "অ্যাডমিন লগইন")) + "</button>" +
+    '<p class="tiny mute" style="text-align:center">Prostuti v1.5 · ' + L("Built-in questions follow the NCTB syllabus; AI questions may occasionally contain mistakes — check with your textbook.", "বিল্ট-ইন প্রশ্ন NCTB সিলেবাস অনুযায়ী; AI প্রশ্নে মাঝে মাঝে ভুল থাকতে পারে — পাঠ্যবই মিলিয়ে নাও।") + "</p>";
   return {
     title: L("Settings", "সেটিংস"), html, nav: false,
     after: () => document.querySelectorAll("[data-ch]").forEach(el => el.addEventListener("change", () => { S.settings[el.dataset.ch] = el.dataset.ch === "goal" ? Number(el.value) : el.value; save(); toast(L("Saved", "সংরক্ষিত")); }))
