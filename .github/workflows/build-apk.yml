@@ -45,7 +45,11 @@ jobs:
             OK=0
           fi
           if [ "$PW_SHA" != "da5b631d7af409ba9b02fa2eaf7496405e8c5dc70ab14b6f2d03d9e2caf4c3cf" ]; then
-            echo "::error::SIGNING_PASSWORD does not match (length ${#PW_CLEAN}, expected 24). Re-paste it from SIGNING_PASSWORD.txt."
+            if [ "$PW_SHA" = "94da741b2ec7ca33c48d848938bda8d5f0efcda277a6ef3ea2e495996f6d458e" ]; then
+              echo "::error::SIGNING_PASSWORD is missing the _ and - symbols (length ${#PW_CLEAN}, expected 24). Re-paste it from SIGNING_PASSWORD.txt including the symbols."
+            else
+              echo "::error::SIGNING_PASSWORD does not match (length ${#PW_CLEAN}, expected 24). Re-paste it from SIGNING_PASSWORD.txt."
+            fi
             OK=0
           fi
           if [ "$OK" != "1" ]; then exit 1; fi
