@@ -72,8 +72,11 @@ def native_request(method, url, key, body):
     return {"status": status, "b64": base64.b64encode(text.encode()).decode()}
 
 BRIDGE = """
+window.__prints = [];
 window.AndroidBridge = {
   openUrl: function (u) {},
+  printHtml: function (t, h) { window.__prints.push(h); },
+  copyText: function (t) {},
   request: function (id, method, url, key, body) {
     fetch("/__proxy", { method: "POST", body: JSON.stringify({ method: method, url: url, key: key, body: body }) })
       .then(function (r) { return r.json(); })
@@ -161,6 +164,32 @@ def cq(page, limit):
     if not page.locator(".cq").count(): raise Exception(page.inner_text("main")[:200])
     return f"{page.locator('details.ans').count()} parts. Stem: " + page.locator(".cq").first.inner_text()[:150].replace("\n", " ")
 
+def notes(page, limit):
+    page.click(".nav [data-v=subjects]")
+    page.click("[data-a=go][data-id=hsc_phy]")
+    page.click("[data-a=chapter][data-c='4']")
+    page.click("[data-a=chNotes][data-k=formula]")
+    wait_until(page, "() => document.querySelectorAll('#chat .msg.a').length && !document.querySelector('#chat .msg.a .spin')", limit)
+    txt = page.locator("#chat .msg.a").last.inner_text()
+    if txt.startswith("⚠"): raise Exception(txt)
+    page.locator("[data-a=msgPdf]").last.click()
+    n = page.evaluate("window.__prints.length")
+    if not n: raise Exception("PDF not produced")
+    return f"{len(txt)} chars, PDF html {len(page.evaluate('window.__prints[window.__prints.length-1]'))} bytes: " + txt[:140].replace("\n", " ")
+
+def mock60(page, limit):
+    page.click(".nav [data-v=mock]")
+    page.select_option("#mN", "60"); page.wait_for_timeout(150); page.select_option("#mT", "60"); page.wait_for_timeout(150)
+    page.click("[data-a=mockSrc][data-v=ai]")
+    page.evaluate(HIDE_TOAST)
+    page.click("[data-a=mockStart]")
+    wait_until(page, "() => document.querySelector('.qtext') || (document.querySelector('.toast') && document.querySelector('.toast').style.display !== 'none' && !document.querySelector('.modal'))", limit)
+    if not page.locator(".qtext").count(): raise Exception(page.inner_text(".toast"))
+    n = page.locator(".qnav button").count(); t = page.inner_text("#timer")
+    page.click("[data-a=back]"); page.click("#askOk")
+    if n < 45: raise Exception(f"only {n} of 60 questions")
+    return f"{n} of 60 questions, timer {t}"
+
 def mock(page, limit):
     page.click("[data-a=back]")
     page.click(".nav [data-v=mock]")
@@ -189,6 +218,9 @@ with sync_playwright() as p:
         step("explain answer", explain, page, 120)
         step("creative question", cq, page, 180)
         step("AI mock 30 questions", mock, page, 240)
+        page.click("[data-a=back]"); page.click("#askOk")
+        step("chapter formulas + PDF", notes, page, 120)
+        step("AI mock 60 questions / 60 min", mock60, page, 300)
     model = page.evaluate("(function(){var s=(JSON.parse(localStorage.getItem('prostuti_v1')||'{}').settings||{});return 'Groq: '+(s.groqModel||'-')+' / Gemini: '+(s.model||'-');})()")
     br.close()
 

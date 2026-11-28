@@ -11,7 +11,7 @@ function defaults() {
     profile: null,
     settings: { lang: "en", theme: "system", apiKey: "", model: "", goal: 30, examDate: "" },
     stats: { ans: {}, days: {}, history: [] },
-    bm: [], mis: [], ai: [], chat: []
+    bm: [], mis: [], ai: [], chat: [], chats: [], chatId: null
   };
 }
 function load() {
@@ -19,6 +19,12 @@ function load() {
   try {
     const j = JSON.parse(localStorage.getItem(KEY) || "null");
     if (j) { d = Object.assign(d, j); d.settings = Object.assign(defaults().settings, j.settings || {}); d.stats = Object.assign(defaults().stats, j.stats || {}); }
+    if (!Array.isArray(d.chats)) d.chats = [];
+    if (d.chat && d.chat.length && !d.chats.length) { // move the old single chat into a session
+      const first = d.chat.find(m => m.role === "user");
+      d.chats = [{ id: "c0", title: first ? String(first.text).slice(0, 40) : "Chat", sub: "", topic: "", msgs: d.chat, t: Date.now() }];
+      d.chatId = "c0"; d.chat = [];
+    }
   } catch (e) {}
   return d;
 }
@@ -172,6 +178,7 @@ const ICON = {
   ai: '<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
   prog: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'
 };
+const GEAR = '<button class="iconbtn" data-a="go" data-v="settings" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>';
 const svg = k => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON[k] + "</svg>";
 
 /* ---------------- render ---------------- */
@@ -189,8 +196,9 @@ function render() {
   const out = V(cur.p);
   const tabs = [["home", L("Home", "হোম")], ["subjects", L("Subjects", "বিষয়")], ["mock", L("Mock Test", "মডেল টেস্ট")], ["tutor", L("AI Tutor", "AI শিক্ষক")], ["progress", L("Progress", "অগ্রগতি")]];
   const root = stack[0].v;
+  const gear = (stack.length === 1 && cur.v !== "onboard" && cur.v !== "home") ? GEAR : "";
   $("#app").innerHTML =
-    (out.top === false ? "" : '<header class="top">' + (stack.length > 1 || out.backBtn ? '<button class="iconbtn" data-a="back" aria-label="Back">‹</button>' : "") + "<h1>" + (out.title || "") + "</h1>" + (out.right || "") + "</header>") +
+    (out.top === false ? "" : '<header class="top">' + (stack.length > 1 || out.backBtn ? '<button class="iconbtn" data-a="back" aria-label="Back">‹</button>' : "") + "<h1>" + (out.title || "") + "</h1>" + (out.right || "") + gear + "</header>") +
     '<main class="' + (out.nav === false ? "noNav" : "") + '">' + out.html + "</main>" +
     (out.nav === false ? "" : '<nav class="nav"><div class="in">' + tabs.map(t => '<button data-a="tab" data-v="' + t[0] + '" class="' + (root === t[0] ? "on" : "") + '">' + svg(t[0] === "subjects" ? "book" : t[0] === "progress" ? "prog" : t[0] === "tutor" ? "ai" : t[0]) + "<span>" + t[1] + "</span></button>").join("") + "</div></nav>");
   if (out.after) out.after();
@@ -302,11 +310,13 @@ VIEWS.home = function () {
     tileBtn("✍", L("Creative (CQ)", "সৃজনশীল প্রশ্ন"), L("AI-made with answers", "AI তৈরি, উত্তরসহ"), "pickCQ") +
     tileBtn("✗", L("My mistakes", "আমার ভুলগুলো"), L(S.mis.length + " to fix", N(S.mis.length) + "টি ঠিক করতে হবে"), "mistakes") +
     tileBtn("★", L("Bookmarks", "বুকমার্ক"), L(S.bm.length + " saved", N(S.bm.length) + "টি সংরক্ষিত"), "bookmarks") +
+    tileBtn("💬", L("Tutor chats", "শিক্ষক চ্যাট"), L(S.chats.length + " saved chats", N(S.chats.length) + "টি চ্যাট"), "openChats") +
+    tileBtn("⚙", L("Settings & AI keys", "সেটিংস ও AI কী"), L("Profile, keys, backup", "প্রোফাইল, কী, ব্যাকআপ"), "toSettings") +
     "</div>" +
     (qod ? '<div class="sec">' + L("Question of the day", "আজকের প্রশ্ন") + '</div><button class="card li" style="margin:0 0 12px" data-a="qod"><span class="t"><span>' + esc(sn(qod.s)) + "</span><b>" + esc(qod.q) + '</b></span><span class="pill">' + L("Answer", "উত্তর দাও") + "</span></button>" : "") +
     (weak.length ? '<div class="sec">' + L("Needs work", "দুর্বল অধ্যায়") + '</div><div class="list">' + weak.map(w => '<button class="li" data-a="practiceCh" data-s="' + w.s + '" data-c="' + w.c + '"><span class="t"><b>' + esc(SUB[w.s].ch[w.c]) + "</b><span>" + esc(sn(w.s)) + " · " + N(w.p) + "% " + L("correct", "সঠিক") + '</span></span><span class="pill r">' + L("Practice", "অনুশীলন") + "</span></button>").join("") + "</div>" : "") +
     '<div class="stat"><div><b>' + N(totalAns) + "</b><span>" + L("answered", "উত্তর দিয়েছ") + "</span></div><div><b>" + N(pct(totalOk, totalAns)) + "%</b><span>" + L("accuracy", "সঠিকতা") + "</span></div><div><b>" + N(S.stats.history.length) + "</b><span>" + L("tests taken", "টেস্ট দিয়েছ") + "</span></div></div>";
-  return { title: "Prostuti", html, right: '<button class="iconbtn" data-a="go" data-v="settings" aria-label="Settings">⚙</button>' };
+  return { title: "Prostuti", html, right: GEAR };
 };
 function tileBtn(ic, t, s, a) { return '<button class="tile" data-a="' + a + '"><span class="ic">' + ic + "</span><b>" + t + "</b><span>" + s + "</span></button>"; }
 function qOfDay() {
@@ -369,14 +379,33 @@ ACT.chapter = d => {
     '<label class="f" style="margin-top:4px">' + L("How many", "কতটি") + '</label><div class="chips" id="gN">' + [5, 10, 15, 20].map(x => '<button class="chip ' + (x === 10 ? "on" : "") + '" data-a="pickChip" data-g="gN" data-val="' + x + '">' + N(x) + "</button>").join("") + "</div>" +
     '<label class="f">' + L("Difficulty", "কাঠিন্য") + '</label><div class="chips" id="gD">' + [["easy", L("Easy", "সহজ")], ["medium", L("Board standard", "বোর্ড মান")], ["hard", L("Hard / Admission", "কঠিন / ভর্তি")]].map(x => '<button class="chip ' + (x[0] === "medium" ? "on" : "") + '" data-a="pickChip" data-g="gD" data-val="' + x[0] + '">' + x[1] + "</button>").join("") + "</div>" +
     '<button class="btn block ghost" style="margin-top:14px" data-a="chGen" data-s="' + s + '" data-c="' + c + '">' + L("Generate & start", "তৈরি করে শুরু করো") + "</button>" +
-    '<div class="grid2" style="margin-top:10px"><button class="btn line" data-a="chCQ" data-s="' + s + '" data-c="' + c + '">✍ ' + L("Creative Q", "সৃজনশীল") + '</button><button class="btn line" data-a="chAsk" data-s="' + s + '" data-c="' + c + '">💬 ' + L("Ask tutor", "শিক্ষককে প্রশ্ন") + "</button></div>");
+    '<div class="grid2" style="margin-top:10px"><button class="btn line" data-a="chCQ" data-s="' + s + '" data-c="' + c + '">✍ ' + L("Creative Q", "সৃজনশীল") + '</button><button class="btn line" data-a="chAsk" data-s="' + s + '" data-c="' + c + '">💬 ' + L("Ask tutor", "শিক্ষককে প্রশ্ন") + "</button></div>" +
+    '<div class="sec" style="margin-top:16px">📚 ' + L("Study material (AI, save as PDF)", "পড়ার উপকরণ (AI, PDF করা যায়)") + '</div><div class="chips">' +
+    '<button class="chip" data-a="chNotes" data-k="notes" data-s="' + s + '" data-c="' + c + '">📝 ' + L("Short notes", "সংক্ষিপ্ত নোট") + "</button>" +
+    '<button class="chip" data-a="chNotes" data-k="formula" data-s="' + s + '" data-c="' + c + '">📐 ' + L("Formulas & key facts", "সূত্র ও মূল তথ্য") + "</button>" +
+    '<button class="chip" data-a="chNotes" data-k="suggest" data-s="' + s + '" data-c="' + c + '">🎯 ' + L("Likely questions", "সাজেশন") + "</button></div>");
 };
 ACT.pickChip = (d, b) => { const g = $("#" + d.g); g.querySelectorAll(".chip").forEach(x => x.classList.remove("on")); b.classList.add("on"); };
 const chipVal = id => { const b = $("#" + id + " .chip.on"); return b ? b.dataset.val : null; };
 ACT.chPractice = d => { closeModal(); ACT.practiceCh(d); };
 ACT.chGen = d => { const n = Number(chipVal("gN") || 10), df = chipVal("gD") || "medium"; closeModal(); aiGenerate(d.s, Number(d.c), n, df); };
 ACT.chCQ = d => { closeModal(); go("cq", { s: d.s, c: Number(d.c) }); };
-ACT.chAsk = d => { closeModal(); tab("tutor"); setTimeout(() => { const t = $("#chatIn"); if (t) { t.value = L("Explain the key concepts of ", "এই অধ্যায়ের মূল বিষয়গুলো সহজভাবে বুঝিয়ে দাও: ") + SUB[d.s].ch[d.c] + " (" + sn(d.s) + ")"; t.focus(); } }, 50); };
+ACT.chAsk = d => {
+  closeModal(); newChat(d.s, SUB[d.s].ch[d.c]); tab("tutor");
+  setTimeout(() => { const t = $("#chatIn"); if (t) { t.value = L("Explain the key concepts of ", "এই অধ্যায়ের মূল বিষয়গুলো সহজভাবে বুঝিয়ে দাও: ") + SUB[d.s].ch[d.c]; t.focus(); } }, 50);
+};
+ACT.chNotes = d => {
+  if (needKey()) return;
+  const s = d.s, ch = SUB[s].ch[Number(d.c)], subj = SUB[s].en;
+  const kinds = {
+    notes: [L("Notes", "নোট"), "Write concise, exam-focused short notes for " + subj + ", chapter '" + ch + "'. Use clear headings and bullet points: key definitions, core concepts, laws/rules, important examples and common mistakes. About 400–500 words."],
+    formula: [L("Formulas", "সূত্র"), "List every important formula, law, definition and key fact for " + subj + ", chapter '" + ch + "'. For each formula give the meaning of every symbol and its SI unit. Group them under headings. Short lines only."],
+    suggest: [L("Suggestion", "সাজেশন"), "Give an exam suggestion for " + subj + ", chapter '" + ch + "': 10 most likely short questions (knowledge/comprehension) each with a one-line answer, then 3 likely creative-question (CQ) topics with what each part might ask."]
+  };
+  const k = kinds[d.k] || kinds.notes;
+  closeModal(); newChat(s, ch, ch + " — " + k[0]); tab("tutor");
+  sendChat(k[1], L(k[0] + ": " + ch, k[0] + ": " + ch));
+};
 ACT.pickCQ = () => {
   modal('<h2 style="margin:0 0 12px;font-size:19px">' + L("Creative question — pick a subject", "সৃজনশীল প্রশ্ন — বিষয় বাছাই") + '</h2><div class="list">' + mySubs().filter(x => x !== "eng" && x.indexOf("gk_") !== 0).map(id => '<button class="li" data-a="cqSub" data-s="' + id + '"><span class="t"><b>' + esc(sn(id)) + '</b></span><span class="mute">›</span></button>').join("") + "</div>");
 };
@@ -409,7 +438,7 @@ function aiErr(e) {
   if (m === "NETWORK" || /fetch|network|timeout/i.test(m)) return L("No internet connection. Built-in questions still work offline.", "ইন্টারনেট সংযোগ নেই। বিল্ট-ইন প্রশ্ন অফলাইনে চলবে।");
   return L("AI error: ", "AI সমস্যা: ") + m;
 }
-function busy(msg) { modal('<div class="row" style="padding:8px 0"><span class="spin"></span><b>' + esc(msg) + '</b></div><p class="small mute" style="margin:8px 0 0">' + L("This usually takes 5–20 seconds.", "সাধারণত ৫–২০ সেকেন্ড লাগে।") + "</p>"); }
+function busy(msg) { modal('<div class="row" style="padding:8px 0"><span class="spin"></span><b id="busyMsg">' + esc(msg) + '</b></div><p class="small mute" style="margin:8px 0 0">' + L("This usually takes 5–20 seconds.", "সাধারণত ৫–২০ সেকেন্ড লাগে।") + "</p>"); }
 function sysPrompt(sid) {
   const p = P(), lang = contentLang(sid);
   const lvl = p.exam === "ADM" ? "university admission test (" + ((C.EXAMS.ADM.targets[p.target] || {}).en || "") + ")" : p.exam + " (" + ((C.GROUPS[p.group] || {}).en || "") + " group)";
@@ -614,7 +643,24 @@ VIEWS.review = function (p) {
       x[1].map((oi, j) => '<div class="small" style="padding:4px 0;' + (oi === q.a ? "color:var(--ok);font-weight:700" : j === ch ? "color:var(--red);text-decoration:line-through" : "") + '">' + letter(j, q) + ") " + esc(q.o[oi]) + "</div>").join("") +
       '<div class="explain small" style="margin-bottom:0">' + esc(q.e) + "</div></div>";
   }).join("");
-  return { title: L("Review", "পর্যালোচনা"), html, nav: false };
+  return { title: L("Review", "পর্যালোচনা"), html: '<button class="btn line block" style="margin-bottom:12px" data-a="reviewPdf">📄 ' + L("Save questions & answers as PDF", "প্রশ্ন ও উত্তর PDF করো") + "</button>" + html, nav: false };
+};
+
+ACT.reviewPdf = () => {
+  const r = stack[stack.length - 1].p.res;
+  const body = '<p>' + L("Score", "স্কোর") + ": <b>" + esc(r.score) + "/" + esc(r.n) + "</b> · " + L("Correct", "সঠিক") + " " + esc(r.c) + " · " + L("Wrong", "ভুল") + " " + esc(r.w) + " · " + L("Skipped", "বাদ") + " " + esc(r.sk) + "</p>" +
+    r.items.map((x, k) => {
+      const q = BYID[x[0]]; if (!q) return "";
+      return '<div class="box"><div class="q" style="margin-top:0">' + (k + 1) + ". " + esc(q.q) + "</div>" +
+        x[1].map((oi, j) => '<div class="' + (oi === q.a ? "ok" : j === x[2] ? "no" : "") + '">' + letter(j, q) + ") " + esc(q.o[oi]) + (oi === q.a ? " ✓" : "") + "</div>").join("") +
+        '<div style="margin-top:4px;color:#555">' + esc(q.e) + "</div></div>";
+    }).join("");
+  exportPDF(r.title, body);
+};
+ACT.savedPdf = d => {
+  const ids = (d.k === "bm" ? S.bm : S.mis).filter(id => BYID[id]);
+  exportPDF(d.k === "bm" ? L("Bookmarked questions", "বুকমার্ক করা প্রশ্ন") : L("My mistakes", "আমার ভুলগুলো"),
+    ids.map((id, k) => { const q = BYID[id]; return '<div class="box"><div class="q" style="margin-top:0">' + (k + 1) + ". " + esc(q.q) + "</div>" + q.o.map((o, j) => '<div class="' + (j === q.a ? "ok" : "") + '">' + letter(j, q) + ") " + esc(o) + (j === q.a ? " ✓" : "") + "</div>").join("") + '<div style="margin-top:4px;color:#555">' + esc(q.e) + "</div></div>"; }).join(""));
 };
 
 /* ---------- Saved (mistakes / bookmarks) ---------- */
@@ -622,7 +668,7 @@ VIEWS.saved = function (p) {
   const ids = (p.kind === "bm" ? S.bm : S.mis).filter(id => BYID[id]);
   const title = p.kind === "bm" ? L("Bookmarks", "বুকমার্ক") : L("My mistakes", "আমার ভুলগুলো");
   if (!ids.length) return { title, html: '<div class="empty"><div class="art">' + (p.kind === "bm" ? "☆" : "✓") + "</div>" + (p.kind === "bm" ? L("Tap ☆ during practice to save hard questions here.", "অনুশীলনের সময় ☆ চাপলে কঠিন প্রশ্ন এখানে জমা হবে।") : L("No mistakes to fix. Wrong answers will appear here automatically.", "ঠিক করার মতো ভুল নেই। ভুল উত্তরগুলো এখানে নিজে থেকে আসবে।")) + "</div>" };
-  const html = '<button class="btn block" style="margin-bottom:12px" data-a="practiceSaved" data-k="' + p.kind + '">' + L("Practice these", "এগুলো অনুশীলন করো") + " (" + N(Math.min(ids.length, 30)) + ")</button>" +
+  const html = '<div class="grid2" style="margin-bottom:12px"><button class="btn" data-a="practiceSaved" data-k="' + p.kind + '">' + L("Practice", "অনুশীলন") + " (" + N(Math.min(ids.length, 30)) + ')</button><button class="btn line" data-a="savedPdf" data-k="' + p.kind + '">📄 PDF</button></div>' +
     '<div class="list">' + ids.slice(0, 100).map(id => { const q = BYID[id]; return '<div class="li"><span class="t"><b>' + esc(q.q) + "</b><span>" + esc(sn(q.s)) + " · ✓ " + esc(q.o[q.a]) + "</span></span></div>"; }).join("") + "</div>";
   return { title, html };
 };
@@ -634,75 +680,102 @@ ACT.practiceSaved = d => {
 /* ---------- Mock test setup ---------- */
 VIEWS.mock = function () { return VIEWS.mocksetup({ root: true }); };
 let mockCfg = null;
+const QN_OPTS = [10, 15, 20, 25, 30, 40, 50, 60, 75, 100], MIN_OPTS = [10, 15, 20, 25, 30, 45, 60, 75, 90, 120, 150, 180];
 VIEWS.mocksetup = function (p) {
   const adm = P().exam === "ADM";
-  if (!mockCfg || p.subs) { mockCfg = { subs: p.subs ? [p.subs] : mySubs().slice(), n: adm ? 50 : 30, min: adm ? 45 : 30, neg: defaultNeg(), src: "bank" }; delete p.subs; }
+  if (!mockCfg || p.subs) { mockCfg = { subs: p.subs ? [p.subs] : mySubs().slice(), n: adm ? 50 : 30, min: adm ? 45 : 30, neg: defaultNeg(), src: "auto" }; delete p.subs; }
   const m = mockCfg;
   const presets = [
-    ["board", "📝 " + L("Board MCQ", "বোর্ড MCQ"), L("30 questions · 30 min · no negative", "৩০ প্রশ্ন · ৩০ মিনিট · নেগেটিভ নেই"), 30, 30, 0],
-    ["adm", "🎓 " + L("Admission style", "ভর্তি স্টাইল"), L("50 questions · 45 min · −0.25", "৫০ প্রশ্ন · ৪৫ মিনিট · −০.২৫"), 50, 45, 0.25],
-    ["quick", "⚡ " + L("Quick test", "দ্রুত টেস্ট"), L("10 questions · 10 min", "১০ প্রশ্ন · ১০ মিনিট"), 10, 10, 0]
+    ["📝 " + L("Board MCQ", "বোর্ড MCQ"), L("30 questions · 30 min · no negative", "৩০ প্রশ্ন · ৩০ মিনিট · নেগেটিভ নেই"), 30, 30, 0],
+    ["🎓 " + L("Admission style", "ভর্তি স্টাইল"), L("50 questions · 45 min · −0.25", "৫০ প্রশ্ন · ৪৫ মিনিট · −০.২৫"), 50, 45, 0.25],
+    ["🏁 " + L("Full paper", "পূর্ণাঙ্গ পরীক্ষা"), L("100 questions · 90 min", "১০০ প্রশ্ন · ৯০ মিনিট"), 100, 90, 0],
+    ["⚡ " + L("Quick test", "দ্রুত টেস্ট"), L("10 questions · 10 min", "১০ প্রশ্ন · ১০ মিনিট"), 10, 10, 0]
   ];
   const avail = pool(q => m.subs.indexOf(q.s) >= 0).length;
+  const srcs = [["auto", "✨ " + L("Saved + AI fills the rest", "সংরক্ষিত + বাকিটা AI")], ["bank", L("Saved only (offline)", "শুধু সংরক্ষিত (অফলাইন)")], ["ai", L("All new from AI", "সব নতুন AI প্রশ্ন")]];
+  const note = m.src === "bank" ? L("Uses built-in and your saved AI questions — " + avail + " available for these subjects. Works offline.", "বিল্ট-ইন ও সংরক্ষিত AI প্রশ্ন — এই বিষয়গুলোতে " + N(avail) + "টি আছে। অফলাইনে চলে।")
+    : m.src === "ai" ? L("AI writes a brand-new paper in batches of 10 (about 10–40 seconds). Needs internet.", "AI ১০টি করে নতুন প্রশ্নপত্র তৈরি করবে (প্রায় ১০–৪০ সেকেন্ড)। ইন্টারনেট লাগবে।")
+    : L("Uses your " + avail + " saved questions first; AI writes any extra needed.", "আগে তোমার " + N(avail) + "টি সংরক্ষিত প্রশ্ন, বাকি প্রশ্ন AI তৈরি করবে।");
   const html =
-    '<div class="sec" style="margin-top:4px">' + L("Format", "ফরম্যাট") + '</div><div class="list">' + presets.map(x => '<button class="li" data-a="mockPreset" data-n="' + x[3] + '" data-m="' + x[4] + '" data-g="' + x[5] + '"><span class="t"><b>' + x[1] + "</b><span>" + x[2] + "</span></span>" + (m.n === x[3] && m.min === x[4] && m.neg === x[5] ? '<span class="pill">✓</span>' : "") + "</button>").join("") + "</div>" +
+    '<div class="sec" style="margin-top:4px">' + L("Format", "ফরম্যাট") + '</div><div class="list">' + presets.map(x => '<button class="li" data-a="mockPreset" data-n="' + x[2] + '" data-m="' + x[3] + '" data-g="' + x[4] + '"><span class="t"><b>' + x[0] + "</b><span>" + x[1] + "</span></span>" + (m.n === x[2] && m.min === x[3] && m.neg === x[4] ? '<span class="pill">✓</span>' : "") + "</button>").join("") + "</div>" +
     '<div class="sec">' + L("Subjects", "বিষয়") + '</div><div class="chips">' + mySubs().map(id => '<button class="chip ' + (m.subs.indexOf(id) >= 0 ? "on" : "") + '" data-a="mockSub2" data-s="' + id + '">' + esc(sn(id)) + "</button>").join("") + "</div>" +
-    '<div class="grid2" style="margin-top:6px"><div><label class="f" for="mN">' + L("Questions", "প্রশ্ন") + '</label><select class="in" id="mN">' + [10, 20, 25, 30, 40, 50, 60, 100].map(x => "<option " + (x === m.n ? "selected" : "") + ' value="' + x + '">' + N(x) + "</option>").join("") + "</select></div>" +
-    '<div><label class="f" for="mT">' + L("Minutes", "মিনিট") + '</label><select class="in" id="mT">' + [10, 15, 20, 25, 30, 45, 60, 90].map(x => "<option " + (x === m.min ? "selected" : "") + ' value="' + x + '">' + N(x) + "</option>").join("") + "</select></div></div>" +
+    '<div class="grid2" style="margin-top:6px"><div><label class="f" for="mN">' + L("Questions", "প্রশ্ন") + '</label><select class="in" id="mN">' + QN_OPTS.map(x => "<option " + (x === m.n ? "selected" : "") + ' value="' + x + '">' + N(x) + "</option>").join("") + "</select></div>" +
+    '<div><label class="f" for="mT">' + L("Time", "সময়") + '</label><select class="in" id="mT">' + MIN_OPTS.map(x => "<option " + (x === m.min ? "selected" : "") + ' value="' + x + '">' + (x >= 60 && x % 30 === 0 ? N(x / 60) + " " + L("hr", "ঘণ্টা") : N(x) + " " + L("min", "মিনিট")) + "</option>").join("") + "</select></div></div>" +
     '<label class="f" for="mG">' + L("Negative marking per wrong answer", "প্রতি ভুলে নেগেটিভ মার্ক") + '</label><select class="in" id="mG">' + [0, 0.25, 0.5].map(x => "<option " + (x === m.neg ? "selected" : "") + ' value="' + x + '">' + (x ? "−" + N(x) : L("None", "নেই")) + "</option>").join("") + "</select>" +
-    '<label class="f">' + L("Questions from", "প্রশ্নের উৎস") + '</label><div class="chips" id="mS"><button class="chip ' + (m.src === "bank" ? "on" : "") + '" data-a="mockSrc" data-v="bank">' + L("Saved bank", "সংরক্ষিত প্রশ্ন") + " (" + N(avail) + ')</button><button class="chip ' + (m.src === "ai" ? "on" : "") + '" data-a="mockSrc" data-v="ai">✨ ' + L("Fresh AI set", "নতুন AI সেট") + "</button></div>" +
-    '<p class="tiny mute" style="margin:8px 0 0">' + (m.src === "ai" ? L("AI writes a brand-new paper (up to 30 questions per call). Needs internet.", "AI একদম নতুন প্রশ্নপত্র তৈরি করবে (প্রতিবারে সর্বোচ্চ ৩০টি)। ইন্টারনেট লাগবে।") : L("Uses built-in and your saved AI questions. Works offline.", "বিল্ট-ইন ও তোমার সংরক্ষিত AI প্রশ্ন ব্যবহার হবে। অফলাইনে চলে।")) + "</p>" +
-    '<button class="btn block" style="margin-top:18px" data-a="mockStart">' + L("Start mock test", "মডেল টেস্ট শুরু করো") + "</button>";
-  return { title: L("Mock Test", "মডেল টেস্ট"), html };
+    '<label class="f">' + L("Questions from", "প্রশ্নের উৎস") + '</label><div class="chips" id="mS">' + srcs.map(x => '<button class="chip ' + (m.src === x[0] ? "on" : "") + '" data-a="mockSrc" data-v="' + x[0] + '">' + x[1] + "</button>").join("") + "</div>" +
+    '<p class="tiny mute" style="margin:8px 0 0">' + note + "</p>" +
+    '<button class="btn block" style="margin-top:18px" data-a="mockStart">' + L("Start mock test", "মডেল টেস্ট শুরু করো") + " · " + N(m.n) + " " + L("Q", "প্রশ্ন") + " · " + (m.min >= 60 && m.min % 30 === 0 ? N(m.min / 60) + " " + L("hr", "ঘণ্টা") : N(m.min) + " " + L("min", "মিনিট")) + "</button>";
+  return { title: L("Mock Test", "মডেল টেস্ট"), html, after: () => ["#mN", "#mT", "#mG"].forEach(id => { const el = $(id); if (el) el.addEventListener("change", () => { mockRead(); render(); }); }) };
 };
 function mockRead() { const n = $("#mN"), t = $("#mT"), g = $("#mG"); if (n) mockCfg.n = Number(n.value); if (t) mockCfg.min = Number(t.value); if (g) mockCfg.neg = Number(g.value); }
 ACT.mockPreset = d => { mockCfg.n = Number(d.n); mockCfg.min = Number(d.m); mockCfg.neg = Number(d.g); render(); };
 ACT.mockSub2 = d => { mockRead(); const k = mockCfg.subs.indexOf(d.s); if (k >= 0) { if (mockCfg.subs.length > 1) mockCfg.subs.splice(k, 1); } else mockCfg.subs.push(d.s); render(); };
 ACT.mockSrc = d => { mockRead(); mockCfg.src = d.v; render(); };
-ACT.mockStart = async () => {
-  mockRead(); const m = mockCfg;
-  const title = L("Mock test", "মডেল টেস্ট") + (m.subs.length === 1 ? " · " + sn(m.subs[0]) : "");
-  if (m.src === "bank") {
-    // spread evenly across subjects
-    const per = {}; m.subs.forEach(s => { per[s] = shuffle(pool(q => q.s === s)); });
-    const out = []; let added = true;
-    while (out.length < m.n && added) { added = false; m.subs.forEach(s => { if (out.length < m.n && per[s].length) { out.push(per[s].pop()); added = true; } }); }
-    if (out.length < m.n) toast(L("Only " + out.length + " questions available — generate more with AI.", "মাত্র " + N(out.length) + "টি প্রশ্ন আছে — AI দিয়ে আরও তৈরি করো।"));
-    return startQuiz({ mode: "mock", title, qs: shuffle(out), limit: Math.round(m.min * 60 * (out.length / m.n || 1)), neg: m.neg });
+function bankPick(subs, n) { // spread evenly across subjects, unseen/wrong first
+  const per = {}; subs.forEach(s => { per[s] = smartPick(pool(q => q.s === s), 1000).reverse(); });
+  const out = []; let added = true;
+  while (out.length < n && added) { added = false; subs.forEach(s => { if (out.length < n && per[s].length) { out.push(per[s].pop()); added = true; } }); }
+  return out;
+}
+// Write `need` MCQs with AI: batches of 10, three at a time, each batch starting on a different free model.
+async function aiMany(subsAll, need, neg, onProgress) {
+  const schema = { type: "ARRAY", items: { type: "OBJECT", properties: { subject: { type: "STRING" }, chapter: { type: "INTEGER" }, q: { type: "STRING" }, options: { type: "ARRAY", items: { type: "STRING" } }, answer: { type: "INTEGER" }, explanation: { type: "STRING" } }, required: ["subject", "chapter", "q", "options", "answer", "explanation"] } };
+  const sizes = []; for (let left = need; left > 0; left -= 10) sizes.push(Math.min(10, left));
+  const byName = {}; subsAll.forEach(s => { byName[SUB[s].en.toLowerCase()] = s; });
+  const stamp = Date.now().toString(36);
+  let got = [], lastErr = null, done = 0;
+  const one = (size, k, attempt) => {
+    const subsK = subsAll.length <= 2 ? subsAll : subsAll.filter((_, i) => i % Math.min(sizes.length, subsAll.length) === k % Math.min(sizes.length, subsAll.length));
+    const subs = subsK.map(s => SUB[s].en + " (chapters: " + SUB[s].ch.join("; ") + ")").join("\n");
+    return AI.generate({
+      ...aiKeys(), groqStart: k + attempt, system: sysPrompt(subsK.length === 1 ? subsK[0] : "mix"), json: true, temperature: 0.9, timeout: 60000, schema,
+      prompt: "Create exactly " + size + " different MCQs (the list must contain " + size + " items) for a model test paper" + (neg ? " in university admission style" : " in Bangladesh board exam style") + ", spread across these subjects and their chapters:\n" + subs +
+        "\nFor each item return: subject (exactly the English subject name given above), chapter (0-based index in that subject's chapter list), q, options (exactly 4), answer (0-based correct index), explanation (1–2 sentences). Mix easy, medium and hard; vary the correct answer position."
+    }).then(out => (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])));
+  };
+  for (let w = 0; w < sizes.length; w += 3) {
+    const wave = sizes.slice(w, w + 3);
+    const res = await Promise.all(wave.map((size, j) => one(size, w + j, 0).catch(async e => {
+      lastErr = e; const m = String(e && e.message || e);
+      if (m === "RATE" || m === "BUSY") { await new Promise(r => setTimeout(r, 6000)); return one(size, w + j, 1).catch(e2 => { lastErr = e2; return []; }); }
+      return [];
+    })));
+    [].concat(...res).forEach(x => { if (x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3) got.push(x); });
+    done += wave.reduce((a, b) => a + b, 0);
+    if (onProgress) onProgress(Math.min(got.length, need), need);
+    if (lastErr && /NETWORK|BADKEY/.test(String(lastErr.message))) break;
   }
-  if (needKey()) return;
-  const n = Math.min(m.n, 30);
-  busy(L("Writing your question paper…", "তোমার প্রশ্নপত্র তৈরি হচ্ছে…"));
-  try {
-    const schema = { type: "ARRAY", items: { type: "OBJECT", properties: { subject: { type: "STRING" }, chapter: { type: "INTEGER" }, q: { type: "STRING" }, options: { type: "ARRAY", items: { type: "STRING" } }, answer: { type: "INTEGER" }, explanation: { type: "STRING" } }, required: ["subject", "chapter", "q", "options", "answer", "explanation"] } };
-    // Write the paper in batches of up to 10 questions at the same time: faster, and each request stays inside free limits.
-    const sizes = []; for (let left = n; left > 0; left -= 10) sizes.push(Math.min(10, left));
-    const subsFor = k => { const list = m.subs.length <= sizes.length ? m.subs : m.subs.filter((_, i) => i % sizes.length === k); return list.length ? list : m.subs; };
-    const batch = (size, k) => {
-      const subsK = subsFor(k);
-      const subs = subsK.map(s => SUB[s].en + " (chapters: " + SUB[s].ch.join("; ") + ")").join("\n");
-      return AI.generate({
-        ...aiKeys(), system: sysPrompt(subsK.length === 1 ? subsK[0] : "mix"), json: true, temperature: 0.9, timeout: 60000, schema,
-        prompt: "Create " + size + " MCQs for a model test paper" + (m.neg ? " in university admission style" : " in Bangladesh board exam style") + ", spread across these subjects:\n" + subs +
-          "\nFor each item return: subject (exactly the English subject name given above), chapter (0-based index in that subject's chapter list), q, options (exactly 4), answer (0-based correct index), explanation (1–2 sentences). Vary difficulty and the correct answer position."
-      }).then(out => (Array.isArray(out) ? out : (Object.values(out || {}).find(Array.isArray) || [])), e => { batchErr = e; return []; });
-    };
-    let batchErr = null;
-    const parts = await Promise.all(sizes.map((size, k) => batch(size, k)));
-    const out = [].concat(...parts);
-    if (!out.length && batchErr) throw batchErr;
-    const byName = {}; m.subs.forEach(s => { byName[SUB[s].en.toLowerCase()] = s; });
-    const stamp = Date.now().toString(36);
-    const qs = out.filter(x => x && x.q && Array.isArray(x.options) && x.options.length === 4 && x.answer >= 0 && x.answer <= 3).map((x, i) => {
-      const s = byName[String(x.subject || "").toLowerCase()] || m.subs[i % m.subs.length];
-      const c = Math.max(0, Math.min(SUB[s].ch.length - 1, Number(x.chapter) || 0));
-      return { id: "a" + stamp + "m" + i, s, c, q: delatex(x.q), o: x.options.map(o => delatex(o)), a: Number(x.answer), e: delatex(x.explanation || ""), src: "ai" };
-    });
-    if (qs.length && qs.length < n) toast(L("Got " + qs.length + " of " + n + " questions (free AI limit) — starting with those.", N(n) + "টির মধ্যে " + N(qs.length) + "টি প্রশ্ন পাওয়া গেছে (ফ্রি সীমা) — এগুলো দিয়ে শুরু হচ্ছে।"));
-    if (!qs.length) throw new Error("AI returned no usable questions");
-    S.ai = qs.concat(S.ai).slice(0, 3000); reindex(); save(); closeModal();
-    startQuiz({ mode: "mock", title: "✨ " + title, qs, limit: Math.round(m.min * 60 * qs.length / m.n), neg: m.neg });
-  } catch (e) { closeModal(); toast(aiErr(e)); }
+  const seen = new Set();
+  const qs = got.filter(x => { const k = String(x.q).trim(); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, need).map((x, i) => {
+    const s = byName[String(x.subject || "").toLowerCase()] || subsAll[i % subsAll.length];
+    const c = Math.max(0, Math.min(SUB[s].ch.length - 1, Number(x.chapter) || 0));
+    return { id: "a" + stamp + "m" + i, s, c, q: delatex(x.q), o: x.options.map(o => delatex(o)), a: Number(x.answer), e: delatex(x.explanation || ""), src: "ai" };
+  });
+  if (!qs.length && lastErr) throw lastErr;
+  return qs;
+}
+ACT.mockStart = async () => {
+  mockRead(); const m = mockCfg, n = m.n;
+  const title = L("Mock test", "মডেল টেস্ট") + (m.subs.length === 1 ? " · " + sn(m.subs[0]) : "");
+  let qs = m.src === "ai" ? [] : bankPick(m.subs, n);
+  const need = n - qs.length;
+  if (need > 0 && m.src !== "bank") {
+    if (!hasAI()) {
+      if (m.src === "ai" || !qs.length) { needKey(); return; }
+      toast(L("Only " + qs.length + " saved questions — add a free AI key in Settings to get the full " + n + ".", "মাত্র " + N(qs.length) + "টি সংরক্ষিত প্রশ্ন — পূর্ণ " + N(n) + "টির জন্য সেটিংসে ফ্রি AI কী দাও।"));
+    } else {
+      busy(L("AI is writing " + need + " questions…", "AI " + N(need) + "টি প্রশ্ন তৈরি করছে…"));
+      try {
+        const got = await aiMany(m.subs, need, m.neg, (k, t) => { const b = $("#busyMsg"); if (b) b.textContent = L("AI is writing questions… " + k + " / " + t, "AI প্রশ্ন তৈরি করছে… " + N(k) + " / " + N(t)); });
+        S.ai = got.concat(S.ai).slice(0, 3000); reindex(); save();
+        qs = qs.concat(got);
+      } catch (e) { if (!qs.length) { closeModal(); return toast(aiErr(e)); } }
+      closeModal();
+    }
+  }
+  if (!qs.length) return toast(L("No questions available for these subjects yet.", "এই বিষয়গুলোতে এখনো প্রশ্ন নেই।"));
+  if (qs.length < n) toast(L("Got " + qs.length + " of " + n + " questions — starting with those.", N(n) + "টির মধ্যে " + N(qs.length) + "টি প্রশ্ন পাওয়া গেছে — এগুলো দিয়ে শুরু হচ্ছে।"));
+  startQuiz({ mode: "mock", title: (m.src === "bank" ? "" : "✨ ") + title, qs: shuffle(qs), limit: m.min * 60, neg: m.neg });
 };
 
 /* ---------- Creative question (CQ) ---------- */
@@ -717,6 +790,7 @@ VIEWS.cq = function (p) {
     html += '<div class="card cq"><h3 style="margin-top:0">' + (lang === "bn" ? "উদ্দীপক" : "Stimulus") + "</h3>" + md(d.stem) + "</div>" +
       '<div class="card cq">' + (d.parts || []).map(x => "<h3>" + esc(x.label) + ") " + esc(x.question) + ' <span class="pill">' + N(x.marks) + "</span></h3>" + '<details class="ans"><summary>' + L("Show model answer", "নমুনা উত্তর দেখো") + "</summary><div>" + md(x.answer) + "</div></details>").join("") + "</div>" +
       '<p class="tiny mute">' + L("Write your own answer on paper first, then compare.", "আগে খাতায় নিজে উত্তর লেখো, তারপর মিলিয়ে নাও।") + "</p>" +
+      '<button class="btn line block" style="margin-bottom:10px" data-a="cqPdf">📄 ' + L("Save as PDF (with answers)", "PDF করো (উত্তরসহ)") + "</button>" +
       '<button class="btn block" data-a="cqAgain">✨ ' + L("Another creative question", "আরেকটি সৃজনশীল প্রশ্ন") + "</button>";
   }
   return { title: L("Creative Question", "সৃজনশীল প্রশ্ন"), html, nav: false, after };
@@ -736,11 +810,26 @@ async function loadCQ(p) {
   } catch (e) { p.loading = false; p.err = aiErr(e); }
   const cur = stack[stack.length - 1]; if (cur && cur.p === p) render();
 }
+ACT.cqPdf = () => {
+  const p = stack[stack.length - 1].p, d = p.data; if (!d) return;
+  const lang = contentLang(p.s);
+  exportPDF(sn(p.s) + " — " + SUB[p.s].ch[p.c], "<h2>" + L("Creative question", "সৃজনশীল প্রশ্ন") + "</h2>" +
+    '<div class="box"><b>' + (lang === "bn" ? "উদ্দীপক" : "Stimulus") + ":</b><br>" + md(d.stem) + "</div>" +
+    (d.parts || []).map(x => '<div class="q">' + esc(x.label) + ") " + esc(x.question) + " [" + esc(x.marks) + "]</div>").join("") +
+    "<h2 style=\"page-break-before:always\">" + L("Model answers", "নমুনা উত্তর") + "</h2>" +
+    (d.parts || []).map(x => '<div class="q">' + esc(x.label) + ") " + esc(x.question) + '</div><div class="box">' + md(x.answer) + "</div>").join(""));
+};
 ACT.cqAgain = () => { const cur = stack[stack.length - 1]; replace("cq", { s: cur.p.s, c: cur.p.c }); };
 
-/* ---------- AI Tutor ---------- */
+/* ---------- AI Tutor (separate chats by subject / topic) ---------- */
+const curChat = () => S.chats.find(c => c.id === S.chatId) || null;
+function newChat(sub, topic, title) {
+  const c = { id: "c" + Date.now().toString(36) + Math.floor(Math.random() * 99), title: title || topic || (sub ? sn(sub) : L("New chat", "নতুন চ্যাট")), sub: sub || "", topic: topic || "", msgs: [], t: Date.now(), auto: !title && !topic };
+  S.chats.unshift(c); S.chats = S.chats.slice(0, 60); S.chatId = c.id; save(); return c;
+}
+const chatDate = t => new Date(t).toLocaleString(bn() ? "bn-BD" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 VIEWS.tutor = function () {
-  const hasKey = hasAI();
+  const c = curChat();
   const chips = [
     L("Explain Newton's 3rd law with examples", "নিউটনের ৩য় সূত্র উদাহরণসহ বুঝিয়ে দাও"),
     L("Make me a 7-day study routine", "আমার জন্য ৭ দিনের পড়ার রুটিন বানাও"),
@@ -748,37 +837,141 @@ VIEWS.tutor = function () {
     L("How do I solve a creative question?", "সৃজনশীল প্রশ্নের উত্তর কীভাবে লিখব?")
   ];
   let html = "";
-  if (!hasKey) html += '<div class="card"><h2>✨ ' + L("Turn on your AI tutor (free)", "তোমার AI শিক্ষক চালু করো (ফ্রি)") + "</h2>" + keySteps() + '<button class="btn block" style="margin-top:12px" data-a="go" data-v="settings">' + L("Add my key", "কী যোগ করো") + "</button></div>";
-  if (!S.chat.length) html += '<div class="empty" style="padding-top:12px"><div class="art">💬</div>' + L("Ask anything from your syllabus — in Bangla, English or Banglish.", "সিলেবাসের যেকোনো প্রশ্ন করো — বাংলা, ইংরেজি বা বাংলিশে।") + '</div><div class="chips" style="justify-content:center;margin-bottom:12px">' + chips.map(c => '<button class="chip" data-a="chatChip">' + esc(c) + "</button>").join("") + "</div>";
-  html += '<div id="chat">' + S.chat.map(m => '<div class="msg ' + (m.role === "user" ? "u" : "a") + '">' + (m.role === "user" ? esc(m.text) : md(m.text)) + "</div>").join("") + (chatBusy ? '<div class="msg a"><span class="spin"></span></div>' : "") + "</div>";
+  if (!hasAI()) html += '<div class="card"><h2>✨ ' + L("Turn on your AI tutor (free)", "তোমার AI শিক্ষক চালু করো (ফ্রি)") + "</h2>" + keySteps() + '<button class="btn block" style="margin-top:12px" data-a="go" data-v="settings">' + L("Add my key", "কী যোগ করো") + "</button></div>";
+  html += '<div class="row" style="margin-bottom:10px;gap:8px"><button class="btn line grow" style="min-height:42px" data-a="openChats">☰ ' + L("All chats", "সব চ্যাট") + " (" + N(S.chats.length) + ')</button><button class="btn ghost grow" style="min-height:42px" data-a="newChatSheet">＋ ' + L("New chat", "নতুন চ্যাট") + "</button></div>";
+  if (c && (c.sub || c.topic)) html += '<div class="small mute" style="margin:-2px 2px 10px">' + (c.sub ? esc(sn(c.sub)) : "") + (c.topic && c.topic !== c.title ? " · " + esc(c.topic) : "") + "</div>";
+  const msgs = c ? c.msgs : [];
+  if (!msgs.length) html += '<div class="empty" style="padding-top:12px"><div class="art">💬</div>' + L("Ask anything from your syllabus — in Bangla, English or Banglish.", "সিলেবাসের যেকোনো প্রশ্ন করো — বাংলা, ইংরেজি বা বাংলিশে।") + '</div><div class="chips" style="justify-content:center;margin-bottom:12px">' + chips.map(x => '<button class="chip" data-a="chatChip">' + esc(x) + "</button>").join("") + "</div>";
+  html += '<div id="chat">' + msgs.map((m, i) => m.role === "user" ? '<div class="msg u">' + esc(m.text) + "</div>"
+    : '<div class="msg a">' + md(m.text) + (String(m.text).charAt(0) === "⚠" ? "" : '<div class="mact"><button data-a="msgPdf" data-i="' + i + '">📄 PDF</button><button data-a="msgCopy" data-i="' + i + '">⧉ ' + L("Copy", "কপি") + "</button></div>") + "</div>").join("") + (chatBusy ? '<div class="msg a"><span class="spin"></span></div>' : "") + "</div>";
+  if (msgs.length > 1) html += '<button class="btn line block" style="margin:4px 0 8px;min-height:42px" data-a="chatPdf">📄 ' + L("Save this whole chat as PDF", "পুরো চ্যাট PDF করো") + "</button>";
   html += '<div class="composer"><textarea class="in grow" id="chatIn" rows="1" placeholder="' + L("Type your question…", "তোমার প্রশ্ন লেখো…") + '"></textarea><button class="btn" data-a="chatSend" aria-label="Send" ' + (chatBusy ? "disabled" : "") + ">➤</button></div>";
   return {
-    title: L("AI Tutor", "AI শিক্ষক"), html,
-    right: S.chat.length ? '<button class="iconbtn" data-a="chatClear" aria-label="Clear chat">🗑</button>' : "",
-    after: () => { if (S.chat.length) window.scrollTo(0, document.body.scrollHeight); }
+    title: esc(c ? c.title : L("AI Tutor", "AI শিক্ষক")), html,
+    after: () => { if (msgs.length) window.scrollTo(0, document.body.scrollHeight); }
   };
 };
 let chatBusy = false;
+ACT.openChats = () => go("chats");
 ACT.chatChip = (d, b) => { $("#chatIn").value = b.textContent; ACT.chatSend(); };
-ACT.chatClear = () => ask(L("Clear chat?", "চ্যাট মুছবে?"), L("This removes the conversation.", "পুরো কথোপকথন মুছে যাবে।"), L("Clear", "মুছো"), () => { S.chat = []; save(); render(); }, true);
-ACT.chatSend = async () => {
-  const inp = $("#chatIn"); const text = (inp && inp.value || "").trim();
+ACT.newChatSheet = () => {
+  modal('<h2 style="margin:0 0 4px;font-size:19px">' + L("New chat", "নতুন চ্যাট") + '</h2><p class="small mute" style="margin:0 0 10px">' + L("Keep each subject or topic in its own chat.", "প্রতিটি বিষয় বা টপিক আলাদা চ্যাটে রাখো।") + "</p>" +
+    '<label class="f" style="margin-top:4px">' + L("Subject", "বিষয়") + '</label><div class="chips" id="ncS"><button class="chip on" data-a="pickChip" data-g="ncS" data-val="">' + L("General", "সাধারণ") + "</button>" + mySubs().map(id => '<button class="chip" data-a="pickChip" data-g="ncS" data-val="' + id + '">' + esc(sn(id)) + "</button>").join("") + "</div>" +
+    '<label class="f" for="ncT">' + L("Topic (optional)", "টপিক (ঐচ্ছিক)") + '</label><input class="in" id="ncT" placeholder="' + L("e.g. Vector, Organic chemistry, Routine", "যেমন: ভেক্টর, জৈব রসায়ন, রুটিন") + '">' +
+    '<button class="btn block" style="margin-top:14px" data-a="newChatCreate">' + L("Start chat", "চ্যাট শুরু করো") + "</button>");
+};
+ACT.newChatCreate = () => { const sub = chipVal("ncS") || "", topic = ($("#ncT").value || "").trim(); closeModal(); newChat(sub, topic); tab("tutor"); };
+function chatSystem(c) {
+  const p = P();
+  return "You are 'Prostuti Tutor', a friendly, encouraging expert teacher for a Bangladeshi student preparing for " + (p.exam === "ADM" ? "university admission tests" : p.exam + " (" + ((C.GROUPS[p.group] || {}).en || "") + " group, " + (p.version === "en" ? "English" : "Bangla") + " version)") +
+    ". Follow the NCTB syllabus." + (c && c.sub ? " This chat is about " + SUB[c.sub].en + (c.topic ? " — " + c.topic : "") + "." : (c && c.topic ? " This chat is about: " + c.topic + "." : "")) +
+    " Explain step by step with simple examples. Reply in the same language the student writes in (Bangla, English or Banglish→Bangla)" + (p.version === "en" ? "" : "; for generated study material use Bangla") +
+    ". Keep answers clear for a phone screen; use plain text, short paragraphs, headings and simple lists, no tables, no LaTeX (use Unicode like x², √, H₂O). If the question is outside studies, gently guide back to studies.";
+}
+async function sendChat(text, shown) {
   if (!text || chatBusy) return;
   if (needKey()) return;
-  const hist = S.chat.slice(-12);
-  S.chat.push({ role: "user", text }); chatBusy = true; save(); render();
-  const p = P();
+  let c = curChat(); if (!c) c = newChat("", "");
+  const hist = c.msgs.slice(-12);
+  c.msgs.push({ role: "user", text: shown || text, t: Date.now() });
+  if (c.auto && c.msgs.filter(m => m.role === "user").length === 1) { c.title = String(shown || text).slice(0, 42); c.auto = false; }
+  c.t = Date.now(); chatBusy = true; save(); if (stack[0].v === "tutor") render();
   try {
-    const t = await AI.generate({
-      ...aiKeys(), history: hist, temperature: 0.6,
-      system: "You are 'Prostuti Tutor', a friendly, encouraging expert teacher for a Bangladeshi student preparing for " + (p.exam === "ADM" ? "university admission tests" : p.exam + " (" + ((C.GROUPS[p.group] || {}).en || "") + " group, " + (p.version === "en" ? "English" : "Bangla") + " version)") +
-        ". Follow the NCTB syllabus. Explain step by step with simple examples. Reply in the same language the student writes in (Bangla, English or Banglish→Bangla). Keep answers short enough for a phone screen; use plain text, short paragraphs and simple lists, no tables, no LaTeX (use Unicode like x², √). If the question is outside studies, gently guide back to studies.",
-      prompt: text
-    });
-    S.chat.push({ role: "model", text: t });
-  } catch (e) { S.chat.push({ role: "model", text: "⚠ " + aiErr(e) }); }
-  chatBusy = false; S.chat = S.chat.slice(-60); save();
+    const t = await AI.generate({ ...aiKeys(), history: hist, temperature: 0.6, timeout: 45000, system: chatSystem(c), prompt: text });
+    c.msgs.push({ role: "model", text: delatex(t), t: Date.now() });
+  } catch (e) { c.msgs.push({ role: "model", text: "⚠ " + aiErr(e), t: Date.now() }); }
+  chatBusy = false; c.msgs = c.msgs.slice(-80); c.t = Date.now(); save();
   if (stack[0].v === "tutor") render();
+}
+ACT.chatSend = () => { const inp = $("#chatIn"); const text = (inp && inp.value || "").trim(); if (text) sendChat(text); };
+const msgHTML = m => m.role === "user" ? '<div class="box u"><b>' + L("Question", "প্রশ্ন") + ":</b> " + esc(m.text) + "</div>" : '<div class="box">' + md(m.text) + "</div>";
+ACT.msgPdf = d => {
+  const c = curChat(); if (!c) return; const i = Number(d.i);
+  const q = c.msgs.slice(0, i).reverse().find(m => m.role === "user");
+  exportPDF(c.title, (q ? msgHTML(q) : "") + msgHTML(c.msgs[i]));
+};
+ACT.chatPdf = () => { const c = curChat(); if (c) exportPDF(c.title, c.msgs.filter(m => String(m.text).charAt(0) !== "⚠").map(msgHTML).join("")); };
+ACT.msgCopy = d => { const c = curChat(); if (c) copyText(c.msgs[Number(d.i)].text); };
+
+VIEWS.chats = function () {
+  const list = S.chats.slice().sort((a, b) => b.t - a.t);
+  const html = '<button class="btn block" style="margin-bottom:12px" data-a="newChatSheet">＋ ' + L("New chat", "নতুন চ্যাট") + "</button>" +
+    (list.length ? '<div class="list">' + list.map(c => '<div class="li" style="padding-inline-end:4px"><button class="t" style="border:0;background:none;text-align:start;padding:0;min-height:44px" data-a="openChat" data-id="' + c.id + '"><b>' + (c.id === S.chatId ? "● " : "") + esc(c.title) + "</b><span>" + (c.sub ? esc(sn(c.sub)) + " · " : "") + N(c.msgs.length) + " " + L("messages", "বার্তা") + " · " + esc(chatDate(c.t)) + '</span></button><button class="iconbtn" data-a="chatMenu" data-id="' + c.id + '" aria-label="More">⋯</button></div>').join("") + "</div>"
+      : '<div class="empty"><div class="art">💬</div>' + L("No chats yet.", "এখনো কোনো চ্যাট নেই।") + "</div>");
+  return { title: L("Tutor chats", "শিক্ষক চ্যাট"), html };
+};
+ACT.openChat = d => { S.chatId = d.id; save(); tab("tutor"); };
+ACT.chatMenu = d => {
+  const c = S.chats.find(x => x.id === d.id); if (!c) return;
+  modal('<h2 style="margin:0 0 12px;font-size:19px">' + esc(c.title) + "</h2>" +
+    '<label class="f" for="rnT" style="margin-top:0">' + L("Rename", "নাম পরিবর্তন") + '</label><div class="row"><input class="in grow" id="rnT" value="' + esc(c.title) + '"><button class="btn" data-a="chatRename" data-id="' + c.id + '">' + L("Save", "সংরক্ষণ") + "</button></div>" +
+    '<div class="grid2" style="margin-top:14px"><button class="btn line" data-a="chatPdfId" data-id="' + c.id + '">📄 PDF</button><button class="btn line" style="color:var(--red)" data-a="chatDelete" data-id="' + c.id + '">🗑 ' + L("Delete", "মুছো") + "</button></div>");
+};
+ACT.chatRename = d => { const c = S.chats.find(x => x.id === d.id); const v = ($("#rnT").value || "").trim(); if (c && v) { c.title = v.slice(0, 60); c.auto = false; save(); } closeModal(); render(); };
+ACT.chatPdfId = d => { closeModal(); const c = S.chats.find(x => x.id === d.id); if (c) exportPDF(c.title, c.msgs.filter(m => String(m.text).charAt(0) !== "⚠").map(msgHTML).join("")); };
+ACT.chatDelete = d => { closeModal(); ask(L("Delete this chat?", "চ্যাটটি মুছবে?"), L("This cannot be undone.", "এটি ফেরানো যাবে না।"), L("Delete", "মুছো"), () => { S.chats = S.chats.filter(x => x.id !== d.id); if (S.chatId === d.id) S.chatId = S.chats.length ? S.chats[0].id : null; save(); render(); }, true); };
+
+/* ---------- PDF, copy, files (native bridge on Android, browser fallback) ---------- */
+function pdfDoc(title, body) {
+  const p = P();
+  return '<!DOCTYPE html><html lang="' + (bn() ? "bn" : "en") + '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(title) + "</title><style>" +
+    '@page{margin:16mm 14mm}body{font-family:"Hind Siliguri","Noto Sans Bengali","Noto Sans",sans-serif;color:#111;font-size:12pt;line-height:1.6;margin:0}' +
+    "h1{font-size:17pt;margin:0 0 2px;color:#0b5d45}h2{font-size:14pt;margin:16px 0 6px}.meta{color:#555;font-size:9.5pt;margin-bottom:14px;border-bottom:2px solid #0b5d45;padding-bottom:6px}" +
+    ".q{font-weight:700;margin-top:12px}.box{border:1px solid #d6d6d6;border-radius:8px;padding:9px 12px;margin:8px 0;white-space:pre-wrap;page-break-inside:avoid}.u{background:#eef6f2}" +
+    ".ok{color:#0a7a45;font-weight:700}.no{color:#c0262f;text-decoration:line-through}.foot{margin-top:20px;color:#888;font-size:8.5pt;border-top:1px solid #ddd;padding-top:6px}</style></head><body>" +
+    "<h1>" + esc(title) + '</h1><div class="meta">Prostuti · ' + esc(p.name || "") + " · " + esc(examLabel()) + " · " + esc(new Date().toLocaleDateString(bn() ? "bn-BD" : "en-GB", { day: "numeric", month: "long", year: "numeric" })) + "</div>" +
+    body + '<div class="foot">' + L("Made with Prostuti exam prep. AI content may contain mistakes — check with your textbook.", "Prostuti দিয়ে তৈরি। AI কনটেন্টে ভুল থাকতে পারে — পাঠ্যবই মিলিয়ে নাও।") + "</div></body></html>";
+}
+function exportPDF(title, body) {
+  const html = pdfDoc(title, body);
+  const name = ("Prostuti - " + title).replace(/[\\/:*?"<>|]+/g, " ").slice(0, 80);
+  if (window.AndroidBridge && window.AndroidBridge.printHtml) {
+    window.AndroidBridge.printHtml(name, html);
+    toast(L("Choose “Save as PDF” on the next screen", "পরের স্ক্রিনে “Save as PDF” বেছে নাও"));
+    return;
+  }
+  try {
+    const f = document.createElement("iframe");
+    f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+    document.body.appendChild(f);
+    f.contentDocument.open(); f.contentDocument.write(html); f.contentDocument.close();
+    setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { toast(L("PDF export works in the Android app.", "PDF এক্সপোর্ট অ্যান্ড্রয়েড অ্যাপে কাজ করে।")); } setTimeout(() => f.remove(), 60000); }, 400);
+  } catch (e) { toast(L("PDF export works in the Android app.", "PDF এক্সপোর্ট অ্যান্ড্রয়েড অ্যাপে কাজ করে।")); }
+}
+function copyText(t) {
+  const done = () => toast(L("Copied", "কপি হয়েছে"));
+  if (window.AndroidBridge && window.AndroidBridge.copyText) { window.AndroidBridge.copyText(String(t)); return done(); }
+  try { navigator.clipboard.writeText(String(t)).then(done, () => toast(L("Couldn't copy", "কপি করা যায়নি"))); } catch (e) { toast(L("Couldn't copy", "কপি করা যায়নি")); }
+}
+window.__fileSaved = ok => toast(ok ? L("Backup saved ✓", "ব্যাকআপ সংরক্ষিত ✓") : L("Backup not saved", "ব্যাকআপ সংরক্ষণ হয়নি"));
+window.__fileOpened = b64 => {
+  if (!b64) return;
+  let text = "";
+  try { const bin = atob(b64); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); text = new TextDecoder("utf-8").decode(bytes); } catch (e) {}
+  restoreFrom(text);
+};
+function restoreFrom(text) {
+  let j = null;
+  try { j = JSON.parse(text); } catch (e) {}
+  const st = j && j.app === "prostuti" && j.state;
+  if (!st || !st.settings || !st.stats) return toast(L("This is not a Prostuti backup file.", "এটি Prostuti ব্যাকআপ ফাইল নয়।"));
+  const when = j.t ? new Date(j.t).toLocaleString(bn() ? "bn-BD" : "en-GB") : "";
+  ask(L("Restore this backup?", "এই ব্যাকআপ ফেরত আনবে?"), L("From " + when + ". Your current data on this phone will be replaced.", when + " তারিখের। এই ফোনের বর্তমান ডেটা বদলে যাবে।"), L("Restore", "ফেরত আনো"), () => {
+    try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {}
+    S = load(); reindex(); stack = []; render(); toast(L("Backup restored ✓", "ব্যাকআপ ফেরত আনা হয়েছে ✓"));
+  });
+}
+ACT.backup = () => {
+  const data = JSON.stringify({ app: "prostuti", v: 1, t: Date.now(), state: S });
+  const name = "prostuti-backup-" + today() + ".json";
+  if (window.AndroidBridge && window.AndroidBridge.saveFile) return window.AndroidBridge.saveFile(name, "application/json", data);
+  try { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([data], { type: "application/json" })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); window.__fileSaved(true); } catch (e) { window.__fileSaved(false); }
+};
+ACT.restore = () => {
+  if (window.AndroidBridge && window.AndroidBridge.openFile) return window.AndroidBridge.openFile();
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = ".json,application/json";
+  inp.onchange = () => { const f = inp.files && inp.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => restoreFrom(String(r.result)); r.readAsText(f); };
+  inp.click();
 };
 
 /* ---------- Progress ---------- */
@@ -821,8 +1014,10 @@ VIEWS.settings = function () {
     '<div class="tiny mute" id="keyMsg" style="margin:8px 0 0;white-space:pre-line">' + L("The app uses Groq first, then Gemini, and switches automatically if one is busy.", "অ্যাপ প্রথমে Groq, তারপর Gemini ব্যবহার করে; একটি ব্যস্ত থাকলে নিজে থেকে অন্যটিতে যায়।") + "</div>" +
     '<p class="tiny mute" style="margin:6px 0 0">' + L("Your keys stay on this phone and are sent only to Groq / Google.", "তোমার কী শুধু এই ফোনে থাকে এবং শুধু Groq / Google-এ পাঠানো হয়।") + "</p></div>" +
     '<div class="card"><h2>' + L("Data", "ডেটা") + '</h2><p class="small mute" style="margin:0 0 10px">' + N(BANK.length) + " " + L("built-in questions", "বিল্ট-ইন প্রশ্ন") + " · " + N(aiCount) + " " + L("saved AI questions", "সংরক্ষিত AI প্রশ্ন") + "</p>" +
+    '<div class="grid2" style="margin-bottom:8px"><button class="btn" data-a="backup">💾 ' + L("Backup to file", "ফাইলে ব্যাকআপ") + '</button><button class="btn ghost" data-a="restore">📂 ' + L("Restore backup", "ব্যাকআপ ফেরত") + "</button></div>" +
+    '<p class="tiny mute" style="margin:0 0 12px">' + L("The backup file keeps your profile, progress, bookmarks, chats and AI keys — keep it private. Use it if you ever reinstall the app or change phones.", "ব্যাকআপ ফাইলে প্রোফাইল, অগ্রগতি, বুকমার্ক, চ্যাট ও AI কী থাকে — গোপন রাখো। অ্যাপ আবার ইনস্টল বা ফোন বদলালে এটি ব্যবহার করো।") + "</p>" +
     '<div class="grid2"><button class="btn line" data-a="clearAI" ' + (aiCount ? "" : "disabled") + ">" + L("Delete AI questions", "AI প্রশ্ন মুছো") + '</button><button class="btn line" style="color:var(--red)" data-a="resetAll">' + L("Reset everything", "সব রিসেট") + "</button></div></div>" +
-    '<p class="tiny mute" style="text-align:center">Prostuti v1.3 · ' + L("Built-in questions follow the NCTB syllabus; AI questions may occasionally contain mistakes — check with your textbook.", "বিল্ট-ইন প্রশ্ন NCTB সিলেবাস অনুযায়ী; AI প্রশ্নে মাঝে মাঝে ভুল থাকতে পারে — পাঠ্যবই মিলিয়ে নাও।") + "</p>";
+    '<p class="tiny mute" style="text-align:center">Prostuti v1.4 · ' + L("Built-in questions follow the NCTB syllabus; AI questions may occasionally contain mistakes — check with your textbook.", "বিল্ট-ইন প্রশ্ন NCTB সিলেবাস অনুযায়ী; AI প্রশ্নে মাঝে মাঝে ভুল থাকতে পারে — পাঠ্যবই মিলিয়ে নাও।") + "</p>";
   return {
     title: L("Settings", "সেটিংস"), html, nav: false,
     after: () => document.querySelectorAll("[data-ch]").forEach(el => el.addEventListener("change", () => { S.settings[el.dataset.ch] = el.dataset.ch === "goal" ? Number(el.value) : el.value; save(); toast(L("Saved", "সংরক্ষিত")); }))

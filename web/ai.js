@@ -6,7 +6,7 @@
 window.AI = (function () {
   const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
   const GROQ = "https://api.groq.com/openai/v1";
-  const DEFAULT_MODEL = "gemini-flash-latest";
+  const DEFAULT_MODEL = "gemini-4-hydrogen";
   const GROQ_MODELS = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "qwen/qwen3-32b"];
   let cbSeq = 0;
   const pending = {};
@@ -73,10 +73,10 @@ window.AI = (function () {
     const all = (JSON.parse(res.text).models || []).filter(function (m) {
       const n = m.name || "";
       return (m.supportedGenerationMethods || []).indexOf("generateContent") >= 0 &&
-        /flash/.test(n) && !/(image|tts|live|audio|embed|vision|transcribe|translate|native|omni)/.test(n);
+        /(flash|hydrogen)/.test(n) && !/(image|tts|live|audio|embed|vision|transcribe|translate|native|omni)/.test(n);
     });
     const ver = function (n) { const m = n.match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
-    const rank = function (n) { return (/(preview|exp)/.test(n) ? 2 : 0) + (/lite/.test(n) ? 1 : 0); };
+    const rank = function (n) { return (/hydrogen/.test(n) ? -4 : 0) + (/(preview|exp)/.test(n) ? 2 : 0) + (/lite/.test(n) ? 1 : 0); };
     all.sort(function (a, b) { return (rank(a.name) - rank(b.name)) || (ver(b.name) - ver(a.name)); });
     modelCache = all.map(function (m) { return m.name.replace(/^models\//, ""); });
     return modelCache;
@@ -93,7 +93,7 @@ window.AI = (function () {
       const b = JSON.parse(JSON.stringify(base));
       if (!noThink[m]) { // Flash models "think" first by default, which is slow
         if (/gemini-2\.5/.test(m)) b.generationConfig.thinkingConfig = { thinkingBudget: 0 };
-        else if (/gemini-(3|flash-latest|flash-lite-latest)/.test(m)) b.generationConfig.thinkingConfig = { thinkingLevel: "low" };
+        else if (/gemini-(3|4|flash-latest|flash-lite-latest)/.test(m)) b.generationConfig.thinkingConfig = { thinkingLevel: "low" };
       }
       return http("POST", GEMINI + "/models/" + encodeURIComponent(m) + ":generateContent", opts.key, JSON.stringify(b), tmo);
     };
@@ -164,7 +164,8 @@ window.AI = (function () {
     (opts.history || []).forEach(function (h) { msgs.push({ role: h.role === "user" ? "user" : "assistant", content: h.text }); });
     msgs.push({ role: "user", content: opts.prompt });
     const list = await groqModels(opts.groqKey);
-    const order = list;
+    const k = (opts.groqStart || 0) % list.length;
+    const order = list.slice(k).concat(list.slice(0, k));
     let res = null, quota = 0, busy = 0, bad = 0;
     for (let i = 0; i < order.length && i < 4 && Date.now() < deadline; i++) {
       const m = order[i];

@@ -3,12 +3,17 @@ package com.prostuti.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.print.PrintAttributes;
+import android.print.PrintManager;
 import android.util.Base64;
 import android.view.View;
 import android.view.Window;
@@ -42,7 +47,10 @@ public class MainActivity extends Activity {
     private static final String GEMINI_API = "https://generativelanguage.googleapis.com/";
     private static final String GROQ_API = "https://api.groq.com/";
 
+    private static final int REQ_SAVE = 41, REQ_OPEN = 42;
     private WebView web;
+    private WebView printView;          // kept alive while Android prints it
+    private String pendingSave;         // backup text waiting for the user to pick a file
     private FrameLayout root;
     private final ExecutorService pool = Executors.newFixedThreadPool(3);
 
@@ -148,6 +156,64 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** Render HTML off-screen and open Android's print screen, where the user can pick "Save as PDF". */
+    private void printHtml(String title, String html) {
+        printView = new WebView(this);
+        printView.getSettings().setJavaScriptEnabled(false);
+        printView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+                if (pm == null) return;
+                String job = (title == null || title.isEmpty()) ? "Prostuti" : title;
+                pm.print(job, view.createPrintDocumentAdapter(job),
+                        new PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build());
+            }
+        });
+        printView.loadDataWithBaseURL("file:///android_asset/", html, "text/html", "UTF-8", null);
+    }
+
+    private void js(final String code) {
+        runOnUiThread(() -> {
+            if (web != null) web.evaluateJavascript(code, null);
+        });
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        final Uri uri = (resultCode == RESULT_OK && data != null) ? data.getData() : null;
+        if (requestCode == REQ_SAVE) {
+            final String text = pendingSave;
+            pendingSave = null;
+            if (uri == null || text == null) { js("window.__fileSaved && window.__fileSaved(false)"); return; }
+            pool.execute(() -> {
+                boolean ok = false;
+                try (OutputStream os = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (os != null) { os.write(text.getBytes(StandardCharsets.UTF_8)); ok = true; }
+                } catch (Exception ignored) {
+                }
+                js("window.__fileSaved && window.__fileSaved(" + ok + ")");
+            });
+        } else if (requestCode == REQ_OPEN) {
+            if (uri == null) return;
+            pool.execute(() -> {
+                String b64 = "";
+                try (InputStream is = getContentResolver().openInputStream(uri)) {
+                    if (is != null) b64 = Base64.encodeToString(readAll(is).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                } catch (Exception ignored) {
+                }
+                js("window.__fileOpened && window.__fileOpened('" + b64 + "')");
+            });
+        }
+    }
+
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
@@ -163,6 +229,51 @@ public class MainActivity extends Activity {
 
     /** Methods callable from JavaScript as window.AndroidBridge.* */
     private class Bridge {
+
+        @JavascriptInterface
+        public void printHtml(final String title, final String html) {
+            runOnUiThread(() -> MainActivity.this.printHtml(title, html));
+        }
+
+        @JavascriptInterface
+        public void copyText(final String text) {
+            runOnUiThread(() -> {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Prostuti", text));
+            });
+        }
+
+        @SuppressWarnings("deprecation")
+        @JavascriptInterface
+        public void saveFile(final String name, final String mime, final String content) {
+            runOnUiThread(() -> {
+                pendingSave = content;
+                Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType(mime == null || mime.isEmpty() ? "application/json" : mime);
+                i.putExtra(Intent.EXTRA_TITLE, name);
+                try {
+                    startActivityForResult(i, REQ_SAVE);
+                } catch (ActivityNotFoundException e) {
+                    pendingSave = null;
+                    js("window.__fileSaved && window.__fileSaved(false)");
+                }
+            });
+        }
+
+        @SuppressWarnings("deprecation")
+        @JavascriptInterface
+        public void openFile() {
+            runOnUiThread(() -> {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("*/*");
+                try {
+                    startActivityForResult(i, REQ_OPEN);
+                } catch (ActivityNotFoundException ignored) {
+                }
+            });
+        }
 
         @JavascriptInterface
         public void openUrl(String url) {
