@@ -25,22 +25,44 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Load signing key from secrets
+      - name: Load and check signing key from secrets
         env:
           KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-            echo "Signing with the permanent Prostuti key"
-          else
+          # Only fingerprints are compared here; the secret values are never printed.
+          if [ -z "$KEYSTORE_B64" ]; then
             echo "::warning::SIGNING_KEYSTORE_BASE64 secret not set - using a temporary debug key (updates will not install over older APKs)"
+            exit 0
           fi
+          echo "$KEYSTORE_B64" | tr -d ' \r\n\t' | base64 -d > "$RUNNER_TEMP/release.jks" 2>/dev/null || true
+          KS_SHA=$(sha256sum "$RUNNER_TEMP/release.jks" | cut -c1-64)
+          PW_CLEAN=$(printf '%s' "$SIGNING_PASSWORD" | tr -d ' \r\n\t')
+          PW_SHA=$(printf '%s' "$PW_CLEAN" | sha256sum | cut -c1-64)
+          OK=1
+          if [ "$KS_SHA" != "c5ef556f9ab68bab3a1b1f25819ca6f0d5fd8abd8febf6e9954731f9d82e341c" ]; then
+            echo "::error::SIGNING_KEYSTORE_BASE64 is not the Prostuti key (decoded size $(stat -c%s "$RUNNER_TEMP/release.jks") bytes, expected 2636). Re-paste the whole line from SIGNING_KEYSTORE_BASE64.txt."
+            OK=0
+          fi
+          if [ "$PW_SHA" != "da5b631d7af409ba9b02fa2eaf7496405e8c5dc70ab14b6f2d03d9e2caf4c3cf" ]; then
+            echo "::error::SIGNING_PASSWORD does not match (length ${#PW_CLEAN}, expected 24). Re-paste it from SIGNING_PASSWORD.txt."
+            OK=0
+          fi
+          if [ "$OK" != "1" ]; then exit 1; fi
+          echo "SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "SIGNING_PASSWORD_CLEAN=$PW_CLEAN" >> "$GITHUB_ENV"
+          echo "::add-mask::$PW_CLEAN"
+          echo "Signing with the permanent Prostuti key"
 
       - name: Build APK
-        env:
-          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          export SIGNING_PASSWORD="$SIGNING_PASSWORD_CLEAN"
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != "0" ]; then
+            grep -E "^(> |\* What went wrong|e: |error:|Execution failed|Caused by)" build.log | head -20 | while read -r line; do echo "::error::$line"; done
+            exit $status
+          fi
 
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk Prostuti.apk
